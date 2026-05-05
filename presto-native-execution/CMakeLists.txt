@@ -64,6 +64,13 @@ option(PRESTO_ENABLE_PARQUET "Enable Parquet support" ON)
 # Forwards user input to VELOX_ENABLE_CUDF.
 option(PRESTO_ENABLE_CUDF "Enable cuDF support" OFF)
 
+# Forwards user input to VELOX_ENABLE_UCX_EXCHANGE. Defaults to ON when
+# cuDF is on (the cudf path expects UCX exchange to be available);
+# otherwise OFF. Override with -DPRESTO_ENABLE_UCX_EXCHANGE=ON to opt
+# the CPU-only build into the experimental UCX-row exchange path.
+option(PRESTO_ENABLE_UCX_EXCHANGE
+  "Build the experimental UCX exchange library." OFF)
+
 # Forwards user input to VELOX_ENABLE_REMOTE_FUNCTIONS.
 option(PRESTO_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 
@@ -106,6 +113,16 @@ if(PRESTO_ENABLE_CUDF)
   enable_language(CUDA)
   # Determine CUDA_ARCHITECTURES automatically.
   cmake_policy(SET CMP0104 NEW)
+endif()
+
+# Propagate UCX-exchange toggle into Velox; if cuDF is on, force it on
+# (the cudf path requires it). Else honor the user's explicit setting.
+if(PRESTO_ENABLE_CUDF)
+  set(VELOX_ENABLE_UCX_EXCHANGE ON CACHE BOOL "Build UCX exchange" FORCE)
+else()
+  set(VELOX_ENABLE_UCX_EXCHANGE
+    ${PRESTO_ENABLE_UCX_EXCHANGE}
+    CACHE BOOL "Build UCX exchange")
 endif()
 
 set(

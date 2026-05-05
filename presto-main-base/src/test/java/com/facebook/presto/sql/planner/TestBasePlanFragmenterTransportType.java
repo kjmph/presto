@@ -13,9 +13,12 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.common.block.SortOrder;
 import com.facebook.presto.common.type.BigintType;
 import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.plan.Ordering;
+import com.facebook.presto.spi.plan.OrderingScheme;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.plan.ValuesNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
@@ -24,6 +27,7 @@ import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.TransportType;
 import com.facebook.presto.sql.tree.ExplainFormat;
+import com.facebook.presto.testing.TestingMetadata.TestingColumnHandle;
 import com.facebook.presto.testing.TestingMetadata.TestingTableHandle;
 import com.facebook.presto.testing.TestingTransactionHandle;
 import com.google.common.collect.ImmutableList;
@@ -70,7 +74,7 @@ public class TestBasePlanFragmenterTransportType
     @Test
     public void testInformationSchemaTableScanRunsOnCoordinator()
     {
-        // information_schema connector is a system connector → should run on coordinator
+        // information_schema connector is a system connector and should run on coordinator.
         ConnectorId infoSchemaId = ConnectorId.createInformationSchemaConnectorId(new ConnectorId("hive"));
         TableHandle handle = new TableHandle(
                 infoSchemaId,
@@ -84,7 +88,7 @@ public class TestBasePlanFragmenterTransportType
     @Test
     public void testSystemTablesConnectorRunsOnCoordinator()
     {
-        // $system@ connector is a system connector → should run on coordinator
+        // $system@ connector is a system connector and should run on coordinator.
         ConnectorId systemId = ConnectorId.createSystemTablesConnectorId(new ConnectorId("hive"));
         TableHandle handle = new TableHandle(
                 systemId,
@@ -161,6 +165,86 @@ public class TestBasePlanFragmenterTransportType
                 .singleDistributionPartitioningScheme(ImmutableList.of()));
 
         assertTrue(containsCoordinatorOnlyNode(localExchange));
+    }
+
+    @Test
+    public void testUnorderedWorkerRemoteExchangeUsesAnyTransport()
+    {
+        ExchangeNode exchange = planBuilder.exchange(e -> e
+                .scope(ExchangeNode.Scope.REMOTE_STREAMING)
+                .type(ExchangeNode.Type.REPARTITION)
+                .addSource(planBuilder.values(col))
+                .addInputsSet(col)
+                .fixedHashDistributionPartitioningScheme(ImmutableList.of(col), ImmutableList.of(col)));
+
+        assertEquals(BasePlanFragmenter.getRemoteStreamingExchangeTransportType(exchange), TransportType.ANY);
+    }
+
+    @Test
+    public void testCoordinatorChildRemoteExchangeUsesHttpTransport()
+    {
+        ConnectorId infoSchemaId = ConnectorId.createInformationSchemaConnectorId(new ConnectorId("hive"));
+        TableHandle handle = new TableHandle(
+                infoSchemaId,
+                new TestingTableHandle(),
+                TestingTransactionHandle.create(),
+                Optional.empty());
+
+        ExchangeNode exchange = planBuilder.exchange(e -> e
+                .scope(ExchangeNode.Scope.REMOTE_STREAMING)
+                .type(ExchangeNode.Type.REPARTITION)
+                .addSource(planBuilder.tableScan(
+                        handle,
+                        ImmutableList.of(col),
+                        ImmutableMap.of(col, new TestingColumnHandle("col"))))
+                .addInputsSet(col)
+                .fixedHashDistributionPartitioningScheme(ImmutableList.of(col), ImmutableList.of(col)));
+
+        assertEquals(BasePlanFragmenter.getRemoteStreamingExchangeTransportType(exchange), TransportType.HTTP);
+    }
+
+    @Test
+    public void testUnorderedGatherRemoteExchangeUsesAnyTransport()
+    {
+        ExchangeNode exchange = planBuilder.exchange(e -> e
+                .scope(ExchangeNode.Scope.REMOTE_STREAMING)
+                .type(ExchangeNode.Type.GATHER)
+                .addSource(planBuilder.values(col))
+                .addInputsSet(col)
+                .singleDistributionPartitioningScheme(col));
+
+        assertEquals(BasePlanFragmenter.getRemoteStreamingExchangeTransportType(exchange), TransportType.ANY);
+    }
+
+    @Test
+    public void testOrderedRemoteExchangeUsesHttpTransport()
+    {
+        OrderingScheme orderingScheme = new OrderingScheme(ImmutableList.of(
+                new Ordering(col, SortOrder.ASC_NULLS_LAST)));
+        ExchangeNode exchange = planBuilder.exchange(e -> e
+                .scope(ExchangeNode.Scope.REMOTE_STREAMING)
+                .type(ExchangeNode.Type.REPARTITION)
+                .addSource(planBuilder.values(col))
+                .addInputsSet(col)
+                .fixedHashDistributionPartitioningScheme(ImmutableList.of(col), ImmutableList.of(col))
+                .setEnsureSourceOrdering(true)
+                .orderingScheme(orderingScheme));
+
+        assertEquals(BasePlanFragmenter.getRemoteStreamingExchangeTransportType(exchange), TransportType.HTTP);
+    }
+
+    @Test
+    public void testSourceOrderedRemoteExchangeUsesHttpTransport()
+    {
+        ExchangeNode exchange = planBuilder.exchange(e -> e
+                .scope(ExchangeNode.Scope.REMOTE_STREAMING)
+                .type(ExchangeNode.Type.REPARTITION)
+                .addSource(planBuilder.values(col))
+                .addInputsSet(col)
+                .fixedHashDistributionPartitioningScheme(ImmutableList.of(col), ImmutableList.of(col))
+                .setEnsureSourceOrdering(true));
+
+        assertEquals(BasePlanFragmenter.getRemoteStreamingExchangeTransportType(exchange), TransportType.HTTP);
     }
 
     // -----------------------------------------------------------------------

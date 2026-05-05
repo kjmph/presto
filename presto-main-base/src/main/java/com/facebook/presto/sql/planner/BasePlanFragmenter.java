@@ -14,7 +14,6 @@
 
 package com.facebook.presto.sql.planner;
 
-import com.facebook.airlift.log.Logger;
 import com.facebook.presto.Session;
 import com.facebook.presto.cost.StatsAndCosts;
 import com.facebook.presto.metadata.Metadata;
@@ -105,8 +104,6 @@ import static java.util.Objects.requireNonNull;
 public abstract class BasePlanFragmenter
         extends SimplePlanRewriter<FragmentProperties>
 {
-    private static final Logger log = Logger.get(BasePlanFragmenter.class);
-
     private final Session session;
     private final Metadata metadata;
     private final PlanNodeIdAllocator idAllocator;
@@ -384,18 +381,7 @@ public abstract class BasePlanFragmenter
 
         setDistributionForExchange(exchange.getType(), partitioningScheme, context);
 
-        // Use ANY (e.g. UCX) for worker-to-worker exchanges, but fall back to
-        // HTTP when a child fragment runs on the coordinator (which only speaks HTTP).
-        TransportType transportType = TransportType.HTTP;
-        boolean anyChildOnCoordinator = exchange.getSources().stream()
-                .anyMatch(PlannerUtils::containsCoordinatorOnlyNode);
-        if (!anyChildOnCoordinator) {
-            transportType = TransportType.ANY;
-        }
-        log.debug("[ANY_EXCHANGE] exchange=%s transport=%s partitioning=%s",
-                exchange.getId(),
-                transportType,
-                context.get().getPartitioningHandle());
+        TransportType transportType = getRemoteStreamingExchangeTransportType(exchange);
 
         ImmutableList.Builder<SubPlan> builder = ImmutableList.builder();
         for (int sourceIndex = 0; sourceIndex < exchange.getSources().size(); sourceIndex++) {
@@ -433,6 +419,27 @@ public abstract class BasePlanFragmenter
                 exchange.getType(),
                 exchange.getPartitioningScheme().getEncoding(),
                 transportType);
+    }
+
+    static TransportType getRemoteStreamingExchangeTransportType(ExchangeNode exchange)
+    {
+        checkArgument(exchange.getScope() == REMOTE_STREAMING, "Unexpected exchange scope: %s", exchange.getScope());
+
+        // Use ANY (e.g. UCX) for unordered worker-to-worker exchanges, including
+        // unordered gather exchanges. Ordered edges remain on HTTP because the
+        // native worker's UCX path does not preserve the coordinator-visible
+        // ordering contract.
+        if (exchange.getOrderingScheme().isPresent() || exchange.isEnsureSourceOrdering()) {
+            return TransportType.HTTP;
+        }
+
+        // Coordinator-only child fragments must use HTTP because the
+        // coordinator does not participate in native UCX data exchange.
+        if (exchange.getSources().stream().anyMatch(PlannerUtils::containsCoordinatorOnlyNode)) {
+            return TransportType.HTTP;
+        }
+
+        return TransportType.ANY;
     }
 
     protected void setDistributionForExchange(ExchangeNode.Type exchangeType, PartitioningScheme partitioningScheme, RewriteContext<FragmentProperties> context)
