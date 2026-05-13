@@ -11,7 +11,8 @@ Synopsis
     ALTER TABLE [ IF EXISTS ] name ADD COLUMN [ IF NOT EXISTS ] column_name data_type [ DEFAULT default_expression ] [ COMMENT comment ] [ WITH ( property_name = expression [, ...] ) ]
     ALTER TABLE [ IF EXISTS ] name DROP COLUMN column_name
     ALTER TABLE [ IF EXISTS ] name RENAME COLUMN [ IF EXISTS ] column_name TO new_column_name
-    ALTER TABLE [ IF EXISTS ] name ADD [ CONSTRAINT constraint_name ] { PRIMARY KEY | UNIQUE } ( { column_name [, ...] } ) [ { ENABLED | DISABLED } ] [ [ NOT ] RELY ] [ [ NOT ] ENFORCED } ]
+    ALTER TABLE [ IF EXISTS ] name ADD [ CONSTRAINT constraint_name ] { PRIMARY KEY | UNIQUE } ( { column_name [, ...] } ) [ { ENABLED | DISABLED } ] [ [ NOT ] RELY ] [ [ NOT ] ENFORCED ]
+    ALTER TABLE [ IF EXISTS ] name ADD [ CONSTRAINT constraint_name ] FOREIGN KEY ( { column_name [, ...] } ) REFERENCES referenced_table_name ( { referenced_column_name [, ...] } ) [ { ENABLED | DISABLED } ] [ [ NOT ] RELY ] [ [ NOT ] ENFORCED ]
     ALTER TABLE [ IF EXISTS ] name DROP CONSTRAINT [ IF EXISTS ] constraint_name
     ALTER TABLE [ IF EXISTS ] name ALTER [ COLUMN ] column_name { SET | DROP } NOT NULL
     ALTER TABLE [ IF EXISTS ] name SET PROPERTIES (property_name=value, [, ...])
@@ -49,6 +50,14 @@ For ``CREATE TAG`` statements:
 * The optional ``OR REPLACE`` clause causes the tag to be replaced if it already exists.
 * The optional ``IF NOT EXISTS`` clause causes the error to be suppressed if the tag already exists.
 * ``OR REPLACE`` and ``IF NOT EXISTS`` cannot be specified together.
+
+Table constraints may be marked ``ENABLED`` or ``DISABLED``, ``RELY`` or
+``NOT RELY``, and ``ENFORCED`` or ``NOT ENFORCED``. Connector support for
+adding, storing, enforcing, and using constraints during planning depends on
+the connector. A ``RELY`` constraint is trusted metadata for query planning
+when the connector supports it, even if the constraint is not enforced by
+Presto. Only mark a constraint as ``RELY`` when the data is guaranteed to
+satisfy the constraint outside of Presto.
 
 Examples
 --------
@@ -92,6 +101,11 @@ Add constraint ``pk`` on column ``user_id`` in the ``users`` table::
 Add unnamed, disabled unique constraint on columns ``first_name`` and ``last_name`` in the ``users`` table if table ``users`` exists::
 
     ALTER TABLE IF EXISTS users ADD UNIQUE (first_name, last_name) DISABLED;
+
+Add disabled foreign key constraint ``fk_orders_customer`` on column
+``custkey`` in the ``orders`` table::
+
+    ALTER TABLE orders ADD CONSTRAINT fk_orders_customer FOREIGN KEY (custkey) REFERENCES customer (custkey) DISABLED RELY NOT ENFORCED;
 
 Drop constraint ``pk`` from the ``users`` table::
 

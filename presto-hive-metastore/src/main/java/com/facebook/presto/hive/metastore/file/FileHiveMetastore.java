@@ -46,6 +46,7 @@ import com.facebook.presto.spi.SchemaNotFoundException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.TableConstraintNotFoundException;
 import com.facebook.presto.spi.TableNotFoundException;
+import com.facebook.presto.spi.constraints.ForeignKeyConstraint;
 import com.facebook.presto.spi.constraints.NotNullConstraint;
 import com.facebook.presto.spi.constraints.PrimaryKeyConstraint;
 import com.facebook.presto.spi.constraints.TableConstraint;
@@ -957,6 +958,17 @@ public class FileHiveMetastore
                         tableConstraint.isRely(),
                         tableConstraint.isEnforced());
             }
+            else if (tableConstraint instanceof ForeignKeyConstraint) {
+                ForeignKeyConstraint<String> foreignKeyConstraint = (ForeignKeyConstraint<String>) tableConstraint;
+                tableConstraint = new ForeignKeyConstraint<>(
+                        Optional.of(randomUUID().toString()),
+                        tableConstraint.getColumns(),
+                        foreignKeyConstraint.getReferencedTable(),
+                        foreignKeyConstraint.getReferencedColumns(),
+                        tableConstraint.isEnabled(),
+                        tableConstraint.isRely(),
+                        tableConstraint.isEnforced());
+            }
             else if (tableConstraint instanceof NotNullConstraint) {
                 tableConstraint = new NotNullConstraint(Optional.of(randomUUID().toString()),
                         tableConstraint.getColumns());
@@ -983,6 +995,12 @@ public class FileHiveMetastore
         constraints.addAll(rawConstraints.stream()
                 .map(constraint -> (TableConstraint<String>) constraint)
                 .filter(constraint -> (constraint instanceof UniqueConstraint) && !(constraint instanceof PrimaryKeyConstraint))
+                .sorted(Comparator.comparing(constraint -> constraint.getName().get()))
+                .collect(toList()));
+
+        constraints.addAll(rawConstraints.stream()
+                .map(constraint -> (TableConstraint<String>) constraint)
+                .filter(constraint -> constraint instanceof ForeignKeyConstraint)
                 .sorted(Comparator.comparing(constraint -> constraint.getName().get()))
                 .collect(toList()));
 

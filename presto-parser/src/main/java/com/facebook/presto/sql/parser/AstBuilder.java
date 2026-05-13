@@ -223,6 +223,7 @@ import java.util.stream.Collectors;
 import static com.facebook.presto.spi.security.ViewSecurity.DEFINER;
 import static com.facebook.presto.spi.security.ViewSecurity.INVOKER;
 import static com.facebook.presto.sql.tree.ConstraintSpecification.ConstraintType;
+import static com.facebook.presto.sql.tree.ConstraintSpecification.ConstraintType.FOREIGN_KEY;
 import static com.facebook.presto.sql.tree.ConstraintSpecification.ConstraintType.PRIMARY_KEY;
 import static com.facebook.presto.sql.tree.ConstraintSpecification.ConstraintType.UNIQUE;
 import static com.facebook.presto.sql.tree.RoutineCharacteristics.Determinism;
@@ -753,6 +754,17 @@ class AstBuilder
     public Node visitNamedConstraintSpecification(SqlBaseParser.NamedConstraintSpecificationContext context)
     {
         ConstraintSpecification unnamedConstraint = (ConstraintSpecification) visit(context.unnamedConstraintSpecification());
+        if (unnamedConstraint.getConstraintType() == FOREIGN_KEY) {
+            return new ConstraintSpecification(getLocation(context),
+                    Optional.of(visit(context.name).toString()),
+                    unnamedConstraint.getColumns(),
+                    unnamedConstraint.getReferencedTable().get(),
+                    unnamedConstraint.getReferencedColumns(),
+                    unnamedConstraint.isEnabled(),
+                    unnamedConstraint.isRely(),
+                    unnamedConstraint.isEnforced());
+        }
+
         return new ConstraintSpecification(getLocation(context),
                 Optional.of(visit(context.name).toString()),
                 unnamedConstraint.getColumns(),
@@ -765,11 +777,13 @@ class AstBuilder
     @Override
     public Node visitUnnamedConstraintSpecification(SqlBaseParser.UnnamedConstraintSpecificationContext context)
     {
-        List<Identifier> columnAliases = visit(context.columnAliases().identifier(), Identifier.class);
-        ConstraintType constraintType = getConstraintType((Token) context.constraintType().getChild(0).getPayload());
+        List<Identifier> columnAliases = visit(context.columns.identifier(), Identifier.class);
+        ConstraintType constraintType = context.constraintType() == null ? FOREIGN_KEY : getConstraintType((Token) context.constraintType().getChild(0).getPayload());
         String constraintTypeString = constraintTypeToString(constraintType);
 
-        List<SqlBaseParser.ConstraintQualifierContext> constraintQualifierContext = context.constraintQualifiers().constraintQualifier();
+        List<SqlBaseParser.ConstraintQualifierContext> constraintQualifierContext = context.constraintQualifiers() == null ?
+                ImmutableList.of() :
+                context.constraintQualifiers().constraintQualifier();
         check(constraintQualifierContext.stream().filter(p -> p.constraintEnabled() != null).count() <= 1,
                 "Invalid " + constraintTypeString + " constraint specification ENABLED",
                 context.constraintQualifiers());
@@ -798,7 +812,21 @@ class AstBuilder
         boolean enforced = !enforcedSpecification.isPresent() ||
                 enforcedSpecification.get().constraintEnforced().NOT() == null;
 
-        return new ConstraintSpecification(getLocation(context),
+        if (constraintType == FOREIGN_KEY) {
+            List<Identifier> referencedColumnAliases = visit(context.referencedColumns.identifier(), Identifier.class);
+            return new ConstraintSpecification(
+                    getLocation(context),
+                    Optional.empty(),
+                    columnAliases.stream().map(Identifier::toString).collect(toImmutableList()),
+                    getQualifiedName(context.referencedTable),
+                    referencedColumnAliases.stream().map(Identifier::toString).collect(toImmutableList()),
+                    enabled,
+                    rely,
+                    enforced);
+        }
+
+        return new ConstraintSpecification(
+                getLocation(context),
                 Optional.empty(),
                 columnAliases.stream().map(Identifier::toString).collect(toImmutableList()),
                 constraintType,
@@ -2698,6 +2726,8 @@ class AstBuilder
     public static String constraintTypeToString(ConstraintType constraintType)
     {
         switch (constraintType) {
+            case FOREIGN_KEY:
+                return "FOREIGN KEY";
             case UNIQUE:
                 return "UNIQUE";
             case PRIMARY_KEY:

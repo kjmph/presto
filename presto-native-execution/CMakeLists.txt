@@ -124,6 +124,9 @@ else()
     ${PRESTO_ENABLE_UCX_EXCHANGE}
     CACHE BOOL "Build UCX exchange")
 endif()
+if(VELOX_ENABLE_UCX_EXCHANGE)
+  add_compile_definitions(VELOX_ENABLE_UCX_EXCHANGE)
+endif()
 
 set(
   VELOX_ENABLE_GEO

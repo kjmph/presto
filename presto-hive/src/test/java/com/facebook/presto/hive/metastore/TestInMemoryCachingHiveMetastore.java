@@ -24,6 +24,8 @@ import com.facebook.presto.hive.metastore.thrift.HiveMetastoreClient;
 import com.facebook.presto.hive.metastore.thrift.MockHiveMetastoreClient;
 import com.facebook.presto.hive.metastore.thrift.ThriftHiveMetastore;
 import com.facebook.presto.hive.metastore.thrift.ThriftHiveMetastoreStats;
+import com.facebook.presto.spi.SchemaTableName;
+import com.facebook.presto.spi.constraints.ForeignKeyConstraint;
 import com.facebook.presto.spi.constraints.NotNullConstraint;
 import com.facebook.presto.spi.constraints.PrimaryKeyConstraint;
 import com.facebook.presto.spi.constraints.TableConstraint;
@@ -637,24 +639,25 @@ public class TestInMemoryCachingHiveMetastore
         assertEquals(mockClient.getAccessCount(), 0);
         List<TableConstraint<String>> tableConstraints = metastoreWithAllCachesEnabled.getTableConstraints(TEST_METASTORE_CONTEXT, TEST_DATABASE, TEST_TABLE_WITH_CONSTRAINTS);
         assertEquals(tableConstraints.get(0), new PrimaryKeyConstraint<>(Optional.of("pk"), new LinkedHashSet<>(ImmutableList.of("c1")), true, true, false));
-        assertEquals(tableConstraints.get(1), new UniqueConstraint<>(Optional.of("uk"), new LinkedHashSet<>(ImmutableList.of("c2")), true, true, false));
-        assertEquals(tableConstraints.get(2), new NotNullConstraint<>("c3"));
-        assertEquals(mockClient.getAccessCount(), 3);
+        assertEquals(tableConstraints.get(1), new ForeignKeyConstraint<>(Optional.of("fk"), new LinkedHashSet<>(ImmutableList.of("c2")), new SchemaTableName(TEST_DATABASE, "parent_table"), new LinkedHashSet<>(ImmutableList.of("id")), true, true, false));
+        assertEquals(tableConstraints.get(2), new UniqueConstraint<>(Optional.of("uk"), new LinkedHashSet<>(ImmutableList.of("c2")), true, true, false));
+        assertEquals(tableConstraints.get(3), new NotNullConstraint<>("c3"));
+        assertEquals(mockClient.getAccessCount(), 4);
         metastoreWithAllCachesEnabled.getTableConstraints(TEST_METASTORE_CONTEXT, TEST_DATABASE, TEST_TABLE_WITH_CONSTRAINTS);
-        assertEquals(mockClient.getAccessCount(), 3);
+        assertEquals(mockClient.getAccessCount(), 4);
         metastoreWithAllCachesEnabled.invalidateAll();
         metastoreWithAllCachesEnabled.getTableConstraints(TEST_METASTORE_CONTEXT, TEST_DATABASE, TEST_TABLE_WITH_CONSTRAINTS);
-        assertEquals(mockClient.getAccessCount(), 6);
+        assertEquals(mockClient.getAccessCount(), 8);
 
         // Test invalidate TEST_TABLE, which should not affect any entries linked to TEST_TABLE_WITH_CONSTRAINTS
         metastoreWithAllCachesEnabled.invalidateCache(TEST_METASTORE_CONTEXT, TEST_DATABASE, TEST_TABLE);
         metastoreWithAllCachesEnabled.getTableConstraints(TEST_METASTORE_CONTEXT, TEST_DATABASE, TEST_TABLE_WITH_CONSTRAINTS);
-        assertEquals(mockClient.getAccessCount(), 6);
+        assertEquals(mockClient.getAccessCount(), 8);
 
         // Test invalidate TEST_TABLE_WITH_CONSTRAINTS
         metastoreWithAllCachesEnabled.invalidateCache(TEST_METASTORE_CONTEXT, TEST_DATABASE, TEST_TABLE_WITH_CONSTRAINTS);
         metastoreWithAllCachesEnabled.getTableConstraints(TEST_METASTORE_CONTEXT, TEST_DATABASE, TEST_TABLE_WITH_CONSTRAINTS);
-        assertEquals(mockClient.getAccessCount(), 9);
+        assertEquals(mockClient.getAccessCount(), 12);
     }
 
     public static class MockHiveCluster

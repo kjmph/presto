@@ -48,6 +48,7 @@ import com.facebook.presto.sql.tree.InListExpression;
 import com.facebook.presto.sql.tree.InPredicate;
 import com.facebook.presto.sql.tree.IsNotNullPredicate;
 import com.facebook.presto.sql.tree.IsNullPredicate;
+import com.facebook.presto.sql.tree.LikePredicate;
 import com.facebook.presto.sql.tree.Literal;
 import com.facebook.presto.sql.tree.LogicalBinaryExpression;
 import com.facebook.presto.sql.tree.Node;
@@ -57,6 +58,8 @@ import com.facebook.presto.sql.tree.SymbolReference;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import io.airlift.joni.Regex;
+import io.airlift.slice.Slice;
 import jakarta.annotation.Nullable;
 import jakarta.inject.Inject;
 
@@ -107,6 +110,9 @@ public class FilterStatsCalculator
      */
     static final double CEIL_IN_PREDICATE_UPPER_BOUND_COEFFICIENT = 0.8;
     static final double UNKNOWN_FILTER_COEFFICIENT = 0.9;
+    private static final double LIKE_PREFIX_OR_SUFFIX_SELECTIVITY = 0.10;
+    private static final double LIKE_CONTAINS_SELECTIVITY = 0.05;
+    private static final double LIKE_SHORT_CONTAINS_SELECTIVITY = 0.25;
 
     private final Metadata metadata;
     private final ScalarStatsCalculator scalarStatsCalculator;
@@ -427,6 +433,26 @@ public class FilterStatsCalculator
         }
 
         @Override
+        protected PlanNodeStatsEstimate visitLikePredicate(LikePredicate node, Void context)
+        {
+            if (!(node.getValue() instanceof SymbolReference) || node.getEscape().isPresent()) {
+                return PlanNodeStatsEstimate.unknown();
+            }
+
+            if (!(node.getPattern() instanceof Literal)) {
+                return PlanNodeStatsEstimate.unknown();
+            }
+
+            Object patternValue = LiteralInterpreter.evaluate(metadata, session.toConnectorSession(), node.getPattern());
+            Optional<String> pattern = toUtf8String(patternValue);
+            if (!pattern.isPresent()) {
+                return PlanNodeStatsEstimate.unknown();
+            }
+
+            return estimateLike(input, toVariable(node.getValue()), pattern.get());
+        }
+
+        @Override
         protected PlanNodeStatsEstimate visitComparisonExpression(ComparisonExpression node, Void context)
         {
             ComparisonExpression.Operator operator = node.getOperator();
@@ -621,6 +647,19 @@ public class FilterStatsCalculator
                 return comparisonCalculator.estimateExpressionToExpressionComparison(input, leftStats, leftVariable, rightStats, rightVariable, getComparisonOperator(operatorType));
             }
 
+            if (functionResolution.isLikeFunction(node.getFunctionHandle())) {
+                if (node.getArguments().size() != 2 || !(node.getArguments().get(0) instanceof VariableReferenceExpression)) {
+                    return PlanNodeStatsEstimate.unknown();
+                }
+
+                Optional<String> pattern = extractLikePattern(node.getArguments().get(1));
+                if (!pattern.isPresent()) {
+                    return PlanNodeStatsEstimate.unknown();
+                }
+
+                return estimateLike(input, (VariableReferenceExpression) node.getArguments().get(0), pattern.get());
+            }
+
             // NOT case
             if (node.getFunctionHandle().equals(functionResolution.notFunction())) {
                 RowExpression argument = node.getArguments().get(0);
@@ -704,6 +743,28 @@ public class FilterStatsCalculator
         private PlanNodeStatsEstimate process(RowExpression rowExpression)
         {
             return normalizer.normalize(rowExpression.accept(this, null));
+        }
+
+        private Optional<String> extractLikePattern(RowExpression patternExpression)
+        {
+            if (patternExpression instanceof ConstantExpression) {
+                return toUtf8String(((ConstantExpression) patternExpression).getValue());
+            }
+
+            if (!(patternExpression instanceof CallExpression)) {
+                return Optional.empty();
+            }
+
+            CallExpression call = (CallExpression) patternExpression;
+            if (!functionResolution.isLikePatternFunction(call.getFunctionHandle()) && !functionResolution.isCastFunction(call.getFunctionHandle())) {
+                return Optional.empty();
+            }
+
+            if (call.getArguments().isEmpty() || !(call.getArguments().get(0) instanceof ConstantExpression)) {
+                return Optional.empty();
+            }
+
+            return toUtf8String(((ConstantExpression) call.getArguments().get(0)).getValue());
         }
 
         private PlanNodeStatsEstimate estimateLogicalAnd(RowExpression left, RowExpression right)
@@ -879,5 +940,126 @@ public class FilterStatsCalculator
             }
             return scalarStatsCalculator.calculate(expression, input, session);
         }
+    }
+
+    private PlanNodeStatsEstimate estimateLike(PlanNodeStatsEstimate input, VariableReferenceExpression variable, String pattern)
+    {
+        if (input.isOutputRowCountUnknown()) {
+            return PlanNodeStatsEstimate.unknown();
+        }
+
+        VariableStatsEstimate variableStats = requireNonNull(input.getVariableStatistics(variable), () -> format("No statistics for variable %s", variable));
+        boolean exactMatch = isExactLike(pattern);
+        if (exactMatch && variableStats.isUnknown()) {
+            return PlanNodeStatsEstimate.unknown();
+        }
+
+        OptionalDouble selectivity = exactMatch ? estimateExactLikeSelectivity(variableStats) : estimateLikeSelectivity(pattern);
+        if (!selectivity.isPresent()) {
+            return PlanNodeStatsEstimate.unknown();
+        }
+
+        double nullsFraction = isNaN(variableStats.getNullsFraction()) ? 0.0 : variableStats.getNullsFraction();
+        double rowCount = input.getOutputRowCount() * (1.0 - nullsFraction) * selectivity.getAsDouble();
+
+        PlanNodeStatsEstimate.Builder result = PlanNodeStatsEstimate.buildFrom(input);
+        result.setOutputRowCount(rowCount);
+        result.addVariableStatistics(variable, estimateLikeVariableStats(variableStats, rowCount, selectivity.getAsDouble(), exactMatch));
+        return result.build();
+    }
+
+    private VariableStatsEstimate estimateLikeVariableStats(VariableStatsEstimate input, double rowCount, double selectivity, boolean exactMatch)
+    {
+        VariableStatsEstimate.Builder builder = VariableStatsEstimate.buildFrom(input)
+                .setNullsFraction(0.0);
+
+        if (exactMatch) {
+            builder.setDistinctValuesCount(min(1.0, rowCount));
+        }
+        else if (!isNaN(input.getDistinctValuesCount())) {
+            builder.setDistinctValuesCount(min(rowCount, input.getDistinctValuesCount() * selectivity));
+        }
+
+        return builder.build();
+    }
+
+    private OptionalDouble estimateLikeSelectivity(String pattern)
+    {
+        if (pattern.isEmpty()) {
+            return OptionalDouble.of(0.0);
+        }
+
+        if (isAllMatchingLike(pattern)) {
+            return OptionalDouble.of(1.0);
+        }
+
+        if (!isSimpleLike(pattern)) {
+            return OptionalDouble.empty();
+        }
+
+        String literal = stripPercentWildcards(pattern);
+        if (literal.length() < 3) {
+            return OptionalDouble.of(LIKE_SHORT_CONTAINS_SELECTIVITY);
+        }
+
+        if (pattern.startsWith("%") && pattern.endsWith("%")) {
+            return OptionalDouble.of(LIKE_CONTAINS_SELECTIVITY);
+        }
+
+        return OptionalDouble.of(LIKE_PREFIX_OR_SUFFIX_SELECTIVITY);
+    }
+
+    private static OptionalDouble estimateExactLikeSelectivity(VariableStatsEstimate variableStats)
+    {
+        if (isNaN(variableStats.getDistinctValuesCount()) || variableStats.getDistinctValuesCount() <= 0) {
+            return OptionalDouble.empty();
+        }
+        return OptionalDouble.of(min(1.0, 1.0 / variableStats.getDistinctValuesCount()));
+    }
+
+    private static boolean isExactLike(String pattern)
+    {
+        return !pattern.contains("%") && !pattern.contains("_");
+    }
+
+    private static boolean isAllMatchingLike(String pattern)
+    {
+        return pattern.chars().allMatch(character -> character == '%');
+    }
+
+    private static boolean isSimpleLike(String pattern)
+    {
+        String literal = stripPercentWildcards(pattern);
+        return !literal.isEmpty() && !literal.contains("%") && !literal.contains("_");
+    }
+
+    private static String stripPercentWildcards(String pattern)
+    {
+        int start = 0;
+        int end = pattern.length();
+        while (start < end && pattern.charAt(start) == '%') {
+            start++;
+        }
+        while (end > start && pattern.charAt(end - 1) == '%') {
+            end--;
+        }
+        return pattern.substring(start, end);
+    }
+
+    private static Optional<String> toUtf8String(Object value)
+    {
+        if (value instanceof Slice) {
+            return Optional.of(((Slice) value).toStringUtf8());
+        }
+        if (value instanceof String) {
+            return Optional.of((String) value);
+        }
+        if (value instanceof Regex) {
+            Object userObject = ((Regex) value).getUserObject();
+            if (userObject instanceof String) {
+                return Optional.of((String) userObject);
+            }
+        }
+        return Optional.empty();
     }
 }

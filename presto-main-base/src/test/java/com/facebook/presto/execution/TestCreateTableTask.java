@@ -28,7 +28,9 @@ import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.connector.ConnectorCapabilities;
+import com.facebook.presto.spi.constraints.ForeignKeyConstraint;
 import com.facebook.presto.spi.constraints.TableConstraint;
 import com.facebook.presto.spi.security.AllowAllAccessControl;
 import com.facebook.presto.sql.analyzer.SemanticException;
@@ -52,6 +54,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static com.facebook.airlift.concurrent.MoreFutures.getFutureValue;
 import static com.facebook.presto.metadata.FunctionAndTypeManager.createTestFunctionAndTypeManager;
 import static com.facebook.presto.spi.StandardErrorCode.ALREADY_EXISTS;
+import static com.facebook.presto.spi.connector.ConnectorCapabilities.FOREIGN_KEY_CONSTRAINT;
 import static com.facebook.presto.spi.connector.ConnectorCapabilities.NOT_NULL_COLUMN_CONSTRAINT;
 import static com.facebook.presto.spi.connector.ConnectorCapabilities.PRIMARY_KEY_CONSTRAINT;
 import static com.facebook.presto.spi.connector.ConnectorCapabilities.UNIQUE_CONSTRAINT;
@@ -193,13 +196,14 @@ public class TestCreateTableTask
     @Test
     public void testCreateWithTableConstraints()
     {
-        metadata.setConnectorCapabilities(PRIMARY_KEY_CONSTRAINT, UNIQUE_CONSTRAINT);
+        metadata.setConnectorCapabilities(PRIMARY_KEY_CONSTRAINT, UNIQUE_CONSTRAINT, FOREIGN_KEY_CONSTRAINT);
         List<TableElement> inputColumns = ImmutableList.of(
                 new ColumnDefinition(identifier("a"), "DATE", true, emptyList(), Optional.empty()),
                 new ColumnDefinition(identifier("b"), "VARCHAR", true, emptyList(), Optional.empty()),
                 new ColumnDefinition(identifier("c"), "VARBINARY", true, emptyList(), Optional.empty()),
                 new ConstraintSpecification(Optional.of("pk"), ImmutableList.of("a"), PRIMARY_KEY, true, true, false),
-                new ConstraintSpecification(Optional.of("uq"), ImmutableList.of("b", "c"), UNIQUE, false, false, false));
+                new ConstraintSpecification(Optional.of("uq"), ImmutableList.of("b", "c"), UNIQUE, false, false, false),
+                new ConstraintSpecification(Optional.of("fk"), ImmutableList.of("b"), QualifiedName.of("ref_schema", "parent_table"), ImmutableList.of("parent_key"), false, true, false));
 
         CreateTable statement = new CreateTable(QualifiedName.of("test_table"), inputColumns, true, ImmutableList.of(), Optional.empty());
 
@@ -211,10 +215,15 @@ public class TestCreateTableTask
         assertEquals(columns.size(), 3);
 
         List<TableConstraint<String>> constraints = metadata.getReceivedTableMetadata().get(0).getTableConstraintsHolder().getTableConstraints();
-        assertEquals(constraints.size(), 2);
+        assertEquals(constraints.size(), 3);
 
         assertEquals(constraints.get(0).getName().get(), "pk");
         assertEquals(constraints.get(1).getName().get(), "uq");
+        assertEquals(constraints.get(2).getName().get(), "fk");
+        assertTrue(constraints.get(2) instanceof ForeignKeyConstraint);
+        ForeignKeyConstraint<String> foreignKeyConstraint = (ForeignKeyConstraint<String>) constraints.get(2);
+        assertEquals(foreignKeyConstraint.getReferencedTable(), new SchemaTableName("ref_schema", "parent_table"));
+        assertEquals(ImmutableList.copyOf(foreignKeyConstraint.getReferencedColumns()), ImmutableList.of("parent_key"));
     }
 
     @Test(expectedExceptions = SemanticException.class, expectedExceptionsMessageRegExp = ".*does not support Primary Key constraints")

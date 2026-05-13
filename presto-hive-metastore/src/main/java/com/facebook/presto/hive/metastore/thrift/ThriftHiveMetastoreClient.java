@@ -14,6 +14,7 @@
 package com.facebook.presto.hive.metastore.thrift;
 
 import com.google.common.collect.ImmutableList;
+import org.apache.hadoop.hive.metastore.api.AddForeignKeyRequest;
 import org.apache.hadoop.hive.metastore.api.AddNotNullConstraintRequest;
 import org.apache.hadoop.hive.metastore.api.AddPrimaryKeyRequest;
 import org.apache.hadoop.hive.metastore.api.AddUniqueConstraintRequest;
@@ -25,6 +26,8 @@ import org.apache.hadoop.hive.metastore.api.Database;
 import org.apache.hadoop.hive.metastore.api.DropConstraintRequest;
 import org.apache.hadoop.hive.metastore.api.EnvironmentContext;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
+import org.apache.hadoop.hive.metastore.api.ForeignKeysRequest;
+import org.apache.hadoop.hive.metastore.api.ForeignKeysResponse;
 import org.apache.hadoop.hive.metastore.api.GetRoleGrantsForPrincipalRequest;
 import org.apache.hadoop.hive.metastore.api.GetRoleGrantsForPrincipalResponse;
 import org.apache.hadoop.hive.metastore.api.GrantRevokeRoleRequest;
@@ -45,6 +48,7 @@ import org.apache.hadoop.hive.metastore.api.PrincipalType;
 import org.apache.hadoop.hive.metastore.api.PrivilegeBag;
 import org.apache.hadoop.hive.metastore.api.Role;
 import org.apache.hadoop.hive.metastore.api.RolePrincipalGrant;
+import org.apache.hadoop.hive.metastore.api.SQLForeignKey;
 import org.apache.hadoop.hive.metastore.api.SQLNotNullConstraint;
 import org.apache.hadoop.hive.metastore.api.SQLPrimaryKey;
 import org.apache.hadoop.hive.metastore.api.SQLUniqueConstraint;
@@ -177,13 +181,13 @@ public class ThriftHiveMetastoreClient
     }
 
     @Override
-    public void createTableWithConstraints(Table table, List<SQLPrimaryKey> primaryKeys, List<SQLUniqueConstraint> uniqueConstraints, List<SQLNotNullConstraint> notNullConstraints)
+    public void createTableWithConstraints(Table table, List<SQLPrimaryKey> primaryKeys, List<SQLForeignKey> foreignKeys, List<SQLUniqueConstraint> uniqueConstraints, List<SQLNotNullConstraint> notNullConstraints)
             throws TException
     {
         if (catalogName.isPresent()) {
             table.setCatName(catalogName.get());
         }
-        client.create_table_with_constraints(table, primaryKeys, emptyList(), uniqueConstraints, notNullConstraints, emptyList(), emptyList());
+        client.create_table_with_constraints(table, primaryKeys, foreignKeys, uniqueConstraints, notNullConstraints, emptyList(), emptyList());
     }
 
     @Override
@@ -522,6 +526,27 @@ public class ThriftHiveMetastoreClient
     }
 
     @Override
+    public Optional<ForeignKeysResponse> getForeignKeyConstraints(String catName, String dbName, String tableName)
+            throws TException
+    {
+        if (catalogName.isPresent()) {
+            catName = catalogName.get();
+        }
+        ForeignKeysRequest foreignKeysRequest = new ForeignKeysRequest(null, null, dbName, tableName);
+        foreignKeysRequest.setCatName(catName);
+
+        try {
+            return Optional.of(client.get_foreign_keys(foreignKeysRequest));
+        }
+        catch (TApplicationException e) {
+            if (e.getType() == UNKNOWN_METHOD) {
+                return Optional.empty();
+            }
+            throw e;
+        }
+    }
+
+    @Override
     public Optional<UniqueConstraintsResponse> getUniqueConstraints(String catName, String dbName, String tableName)
             throws TException
     {
@@ -604,6 +629,23 @@ public class ThriftHiveMetastoreClient
         }
         AddPrimaryKeyRequest addPrimaryKeyRequest = new AddPrimaryKeyRequest(updatedConstraints);
         client.add_primary_key(addPrimaryKeyRequest);
+    }
+
+    @Override
+    public void addForeignKeyConstraint(List<SQLForeignKey> constraint)
+            throws TException
+    {
+        List<SQLForeignKey> updatedConstraints = constraint;
+        if (catalogName.isPresent()) {
+            updatedConstraints = constraint.stream().map(foreignKeyConstraint -> {
+                foreignKeyConstraint = foreignKeyConstraint.deepCopy();
+                foreignKeyConstraint.setCatName(catalogName.get());
+                return foreignKeyConstraint;
+            })
+            .collect(toImmutableList());
+        }
+        AddForeignKeyRequest addForeignKeyRequest = new AddForeignKeyRequest(updatedConstraints);
+        client.add_foreign_key(addForeignKeyRequest);
     }
 
     @Override

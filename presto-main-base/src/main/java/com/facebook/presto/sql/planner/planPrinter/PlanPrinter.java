@@ -842,9 +842,26 @@ public class PlanPrinter
                     format("TopNRowNumber%s", node.isPartial() ? "Partial" : ""),
                     format("[%s limit %s]%s", Joiner.on(", ").join(args), node.getMaxRowCountPerPartition(), formatHash(node.getHashVariable())));
 
-            nodeOutput.appendDetailsLine("%s := %s%s", node.getRowNumberVariable(), "row_number()", formatSourceLocation(node.getRowNumberVariable().getSourceLocation()));
+            nodeOutput.appendDetailsLine(
+                    "%s := %s%s",
+                    node.getRowNumberVariable(),
+                    formatRankingFunction(node.getRankingFunction()),
+                    formatSourceLocation(node.getRowNumberVariable().getSourceLocation()));
 
             return processChildren(node, context);
+        }
+
+        private String formatRankingFunction(TopNRowNumberNode.RankingFunction rankingFunction)
+        {
+            switch (rankingFunction) {
+                case ROW_NUMBER:
+                    return "row_number()";
+                case RANK:
+                    return "rank()";
+                case DENSE_RANK:
+                    return "dense_rank()";
+            }
+            throw new IllegalArgumentException("Unsupported ranking function: " + rankingFunction);
         }
 
         @Override

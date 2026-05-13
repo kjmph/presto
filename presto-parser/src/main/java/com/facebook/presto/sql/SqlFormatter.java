@@ -2051,16 +2051,26 @@ public final class SqlFormatter
                 sb.append(node.getConstraintName().get());
                 sb.append(" ");
             }
-            sb.append(node.getConstraintType() == UNIQUE ? "UNIQUE " : "PRIMARY KEY ");
-            sb.append("(");
-            Iterator<String> columns = node.getColumns().iterator();
-            while (columns.hasNext()) {
-                sb.append(columns.next());
-                if (columns.hasNext()) {
-                    sb.append(", ");
-                }
+            switch (node.getConstraintType()) {
+                case UNIQUE:
+                    sb.append("UNIQUE ");
+                    appendColumnList(sb, node.getColumns());
+                    break;
+                case PRIMARY_KEY:
+                    sb.append("PRIMARY KEY ");
+                    appendColumnList(sb, node.getColumns());
+                    break;
+                case FOREIGN_KEY:
+                    sb.append("FOREIGN KEY ");
+                    appendColumnList(sb, node.getColumns());
+                    sb.append(" REFERENCES ");
+                    sb.append(node.getReferencedTable().get());
+                    sb.append(" ");
+                    appendColumnList(sb, node.getReferencedColumns());
+                    break;
+                default:
+                    throw new IllegalArgumentException("Unsupported constraint type: " + node.getConstraintType());
             }
-            sb.append(")");
             if (!node.isEnabled()) {
                 sb.append(" DISABLED");
             }
@@ -2071,6 +2081,19 @@ public final class SqlFormatter
                 sb.append(" NOT ENFORCED");
             }
             return sb.toString();
+        }
+
+        private void appendColumnList(StringBuilder sb, List<String> columnNames)
+        {
+            sb.append("(");
+            Iterator<String> columns = columnNames.iterator();
+            while (columns.hasNext()) {
+                sb.append(columns.next());
+                if (columns.hasNext()) {
+                    sb.append(", ");
+                }
+            }
+            sb.append(")");
         }
 
         private void processRelation(Relation relation, Integer indent)

@@ -3187,6 +3187,8 @@ public class TestSqlParser
         assertStatement("ALTER TABLE IF EXISTS foo.t ADD CONSTRAINT cons primary key (c1, c2)", new AddConstraint(QualifiedName.of("foo", "t"), true, new ConstraintSpecification(Optional.of("cons"), ImmutableList.of("c1", "c2"), PRIMARY_KEY, true, true, true)));
         assertStatement("ALTER TABLE foo.t ADD CONSTRAINT cons UNIQUE (c1, c2)", new AddConstraint(QualifiedName.of("foo", "t"), false, new ConstraintSpecification(Optional.of("cons"), ImmutableList.of("c1", "c2"), UNIQUE, true, true, true)));
         assertStatement("ALTER TABLE IF EXISTS foo.t ADD CONSTRAINT cons UNIQUE (c1, c2)", new AddConstraint(QualifiedName.of("foo", "t"), true, new ConstraintSpecification(Optional.of("cons"), ImmutableList.of("c1", "c2"), UNIQUE, true, true, true)));
+        assertStatement("ALTER TABLE foo.t ADD CONSTRAINT fk FOREIGN KEY (c1, c2) REFERENCES foo.parent (p1, p2) DISABLED RELY NOT ENFORCED",
+                new AddConstraint(QualifiedName.of("foo", "t"), false, new ConstraintSpecification(Optional.of("fk"), ImmutableList.of("c1", "c2"), QualifiedName.of("foo", "parent"), ImmutableList.of("p1", "p2"), false, true, false)));
 
         // Test all combinations of enabled/rely/enforced
         assertStatement("ALTER TABLE foo.t ADD CONSTRAINT cons PRIMARY KEY (c1, c2) ENABLED", new AddConstraint(QualifiedName.of("foo", "t"), false, new ConstraintSpecification(Optional.of("cons"), ImmutableList.of("c1", "c2"), PRIMARY_KEY, true, true, true)));
@@ -3225,6 +3227,7 @@ public class TestSqlParser
         // Negative tests
         assertInvalidStatement("ALTER TABLE foo.t ADD PRIMARY KEY", ".*mismatched input.*");
         assertInvalidStatement("ALTER TABLE foo.t ADD CONSTRAINT uq UNIQUE", ".*mismatched input.*");
+        assertInvalidStatement("ALTER TABLE foo.t ADD CONSTRAINT fk FOREIGN KEY (c1) REFERENCES foo.parent", ".*mismatched input.*");
         assertInvalidStatement("ALTER TABLE foo.t ADD CONSTRAINT pk PRIMARY KEY (c1, c2), ADD CONSTRAINT uq UNIQUE (c3)", ".*mismatched input.*");
         assertInvalidStatement("ALTER TABLE foo.t ADD PRIMARY KEY (c1) NOT ENFORCED ENFORCED RELY", ".*Invalid.*constraint specification.*");
         assertInvalidStatement("ALTER TABLE foo.t ADD PRIMARY KEY (c1) RELY ENABLED NOT ENFORCED NOT RELY", ".*Invalid.*constraint specification.*");
@@ -3262,6 +3265,16 @@ public class TestSqlParser
                                 new ColumnDefinition(identifier("b"), "BIGINT", true, emptyList(), Optional.of("hello world")),
                                 new ColumnDefinition(identifier("c"), "DOUBLE", true, emptyList(), Optional.empty()),
                                 new ConstraintSpecification(Optional.of("uq"), ImmutableList.of("c", "b"), UNIQUE, true, true, true)),
+                        false,
+                        ImmutableList.of(),
+                        Optional.empty()));
+
+        assertStatement("CREATE TABLE foo (a VARCHAR, parent_id BIGINT, CONSTRAINT fk FOREIGN KEY (parent_id) REFERENCES parent (id) DISABLED RELY NOT ENFORCED)",
+                new CreateTable(QualifiedName.of("foo"),
+                        ImmutableList.of(
+                                new ColumnDefinition(identifier("a"), "VARCHAR", true, emptyList(), Optional.empty()),
+                                new ColumnDefinition(identifier("parent_id"), "BIGINT", true, emptyList(), Optional.empty()),
+                                new ConstraintSpecification(Optional.of("fk"), ImmutableList.of("parent_id"), QualifiedName.of("parent"), ImmutableList.of("id"), false, true, false)),
                         false,
                         ImmutableList.of(),
                         Optional.empty()));
