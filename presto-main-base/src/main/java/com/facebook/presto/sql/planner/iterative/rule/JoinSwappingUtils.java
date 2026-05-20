@@ -127,7 +127,9 @@ public class JoinSwappingUtils
                 leftHashVariable,
                 swapped.getRightHashVariable(),
                 swapped.getDistributionType(),
-                swapped.getDynamicFilters());
+                swapped.getDynamicFilters(),
+                swapped.isLeftKeysUnique(),
+                swapped.isRightKeysUnique());
 
         return Optional.of(newJoinNode);
     }

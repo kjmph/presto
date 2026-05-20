@@ -114,6 +114,92 @@ public class TestPushPartialAggregationThroughExchange
     }
 
     @Test
+    public void testPartialAggregationPushedWhenGroupedEstimateShowsReduction()
+    {
+        tester().assertThat(new PushPartialAggregationThroughExchange(getFunctionManager(), false))
+                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "AUTOMATIC")
+                .on(p -> {
+                    VariableReferenceExpression a = p.variable("a", DOUBLE);
+                    VariableReferenceExpression b = p.variable("b", DOUBLE);
+                    return p.aggregation(ab -> ab
+                            .source(
+                                    p.exchange(e -> e
+                                            .addSource(p.values(new PlanNodeId("values"), a, b))
+                                            .addInputsSet(a, b)
+                                            .singleDistributionPartitioningScheme(a, b)))
+                            .addAggregation(p.variable("SUM", DOUBLE), p.rowExpression("SUM(a)"))
+                            .singleGroupingSet(b)
+                            .step(PARTIAL));
+                })
+                .overrideStats("values", PlanNodeStatsEstimate.builder()
+                        .setOutputRowCount(6_000_000_000.0)
+                        .addVariableStatistics(variable("a", DOUBLE), new VariableStatsEstimate(0, 1000, 0, 8, 1000))
+                        .addVariableStatistics(variable("b", DOUBLE), new VariableStatsEstimate(0, 1_500_000_000, 0, 8, 1_500_000_000))
+                        .setConfidence(FACT)
+                        .build())
+                .matches(exchange(
+                        project(
+                                aggregation(
+                                        ImmutableMap.of("SUM", functionCall("sum", ImmutableList.of("a"))),
+                                        PARTIAL,
+                                        values("a", "b")))));
+    }
+
+    @Test
+    public void testNoPartialAggregationWhenGroupedEstimateReductionBelowThreshold()
+    {
+        tester().assertThat(new PushPartialAggregationThroughExchange(getFunctionManager(), false))
+                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "AUTOMATIC")
+                .on(p -> {
+                    VariableReferenceExpression a = p.variable("a", DOUBLE);
+                    VariableReferenceExpression b = p.variable("b", DOUBLE);
+                    return p.aggregation(ab -> ab
+                            .source(
+                                    p.exchange(e -> e
+                                            .addSource(p.values(new PlanNodeId("values"), a, b))
+                                            .addInputsSet(a, b)
+                                            .singleDistributionPartitioningScheme(a, b)))
+                            .addAggregation(p.variable("SUM", DOUBLE), p.rowExpression("SUM(a)"))
+                            .singleGroupingSet(b)
+                            .step(PARTIAL));
+                })
+                .overrideStats("values", PlanNodeStatsEstimate.builder()
+                        .setOutputRowCount(1000)
+                        .addVariableStatistics(variable("a", DOUBLE), new VariableStatsEstimate(0, 1000, 0, 8, 1000))
+                        .addVariableStatistics(variable("b", DOUBLE), new VariableStatsEstimate(0, 800, 0, 8, 800))
+                        .setConfidence(FACT)
+                        .build())
+                .doesNotFire();
+    }
+
+    @Test
+    public void testNoPartialAggregationWhenGroupedEstimateShowsReductionForSmallInput()
+    {
+        tester().assertThat(new PushPartialAggregationThroughExchange(getFunctionManager(), false))
+                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "AUTOMATIC")
+                .on(p -> {
+                    VariableReferenceExpression a = p.variable("a", DOUBLE);
+                    VariableReferenceExpression b = p.variable("b", DOUBLE);
+                    return p.aggregation(ab -> ab
+                            .source(
+                                    p.exchange(e -> e
+                                            .addSource(p.values(new PlanNodeId("values"), a, b))
+                                            .addInputsSet(a, b)
+                                            .singleDistributionPartitioningScheme(a, b)))
+                            .addAggregation(p.variable("SUM", DOUBLE), p.rowExpression("SUM(a)"))
+                            .singleGroupingSet(b)
+                            .step(PARTIAL));
+                })
+                .overrideStats("values", PlanNodeStatsEstimate.builder()
+                        .setOutputRowCount(1000)
+                        .addVariableStatistics(variable("a", DOUBLE), new VariableStatsEstimate(0, 1000, 0, 8, 1000))
+                        .addVariableStatistics(variable("b", DOUBLE), new VariableStatsEstimate(0, 100, 0, 8, 100))
+                        .setConfidence(FACT)
+                        .build())
+                .doesNotFire();
+    }
+
+    @Test
     public void testNoPartialAggregationWhenReductionBelowThresholdUsingPartialAggregationStats()
     {
         tester().assertThat(new PushPartialAggregationThroughExchange(getFunctionManager(), false))

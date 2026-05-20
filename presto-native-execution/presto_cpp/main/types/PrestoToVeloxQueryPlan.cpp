@@ -1305,7 +1305,10 @@ core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
       toVeloxQueryPlan(node->left, tableWriteInfo, taskId),
       toVeloxQueryPlan(node->right, tableWriteInfo, taskId),
       toRowType(node->outputVariables, typeParser_),
-      useCachedHashTable(*node));
+      useCachedHashTable(*node),
+      /*nullAsValue=*/false,
+      node->leftKeysUnique,
+      node->rightKeysUnique);
 }
 
 core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
