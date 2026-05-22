@@ -115,6 +115,12 @@ if(PRESTO_ENABLE_CUDF)
   target_link_libraries(presto_server_lib velox_cudf_exec)
 endif()
 
+# velox_ucx_exchange is an OBJECT library. Linking OBJECT libraries through
+# the presto_server_lib STATIC archive can drop object files whose symbols are
+# otherwise unreferenced, including DriverAdapter auto-registration constructors.
+# Link it directly to the executable, matching the connector OBJECT targets
+# below.
+
 # Enabling Parquet causes build errors with missing symbols on MacOS. This is
 # likely due to a conflict between Arrow Thrift from velox_hive_connector and
 # FBThrift libraries. The build issue is fixed by linking velox_hive_connector
@@ -151,6 +157,10 @@ endif()
 # change the target in Velox to a library target then we can move this to the
 # presto_server_lib.
 target_link_libraries(presto_server presto_server_lib velox_tpch_connector velox_tpcds_connector)
+
+if(VELOX_ENABLE_UCX_EXCHANGE)
+  target_link_libraries(presto_server velox_ucx_exchange)
+endif()
 
 # Clang requires explicit linking with libatomic.
 if(

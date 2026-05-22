@@ -85,6 +85,9 @@
 #ifdef PRESTO_ENABLE_CUDF
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+#include "velox/experimental/ucx-exchange/UcxCudfDriverAdapter.h"
+#endif
 #endif
 
 #ifdef PRESTO_ENABLE_REMOTE_FUNCTIONS
@@ -190,6 +193,17 @@ void registerVeloxCudf() {
     if (velox::cudf_velox::CudfConfig::getInstance().enabled) {
       velox::cudf_velox::registerCudf();
       PRESTO_STARTUP_LOG(INFO) << "cuDF is registered.";
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+      if (velox::cudf_velox::CudfConfig::getInstance().exchange) {
+        if (velox::ucx_exchange::startCudfUcxExchange()) {
+          PRESTO_STARTUP_LOG(INFO) << "cuDF UCX exchange is started.";
+        } else {
+          PRESTO_STARTUP_LOG(WARNING)
+              << "cudf.exchange is enabled, but cuDF UCX exchange did not "
+                 "start; standard exchange operators will be used.";
+        }
+      }
+#endif
     }
   }
 #endif
