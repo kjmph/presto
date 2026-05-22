@@ -381,7 +381,7 @@ public abstract class BasePlanFragmenter
 
         setDistributionForExchange(exchange.getType(), partitioningScheme, context);
 
-        TransportType transportType = getRemoteStreamingExchangeTransportType(exchange);
+        TransportType transportType = getRemoteStreamingExchangeTransportType(exchange, context.get());
 
         ImmutableList.Builder<SubPlan> builder = ImmutableList.builder();
         for (int sourceIndex = 0; sourceIndex < exchange.getSources().size(); sourceIndex++) {
@@ -421,7 +421,7 @@ public abstract class BasePlanFragmenter
                 transportType);
     }
 
-    static TransportType getRemoteStreamingExchangeTransportType(ExchangeNode exchange)
+    static TransportType getRemoteStreamingExchangeTransportType(ExchangeNode exchange, FragmentProperties parentProperties)
     {
         checkArgument(exchange.getScope() == REMOTE_STREAMING, "Unexpected exchange scope: %s", exchange.getScope());
 
@@ -433,9 +433,11 @@ public abstract class BasePlanFragmenter
             return TransportType.HTTP;
         }
 
-        // Coordinator-only child fragments must use HTTP because the
-        // coordinator does not participate in native UCX data exchange.
-        if (exchange.getSources().stream().anyMatch(PlannerUtils::containsCoordinatorOnlyNode)) {
+        // Coordinator-only child fragments and coordinator-bound consumers must
+        // use HTTP because the coordinator does not participate in native UCX
+        // data exchange.
+        if (exchange.getSources().stream().anyMatch(PlannerUtils::containsCoordinatorOnlyNode) ||
+                parentProperties.hasCoordinatorOnlyDistribution()) {
             return TransportType.HTTP;
         }
 
@@ -573,6 +575,11 @@ public abstract class BasePlanFragmenter
         public TransportType getOutputTransportType()
         {
             return outputTransportType;
+        }
+
+        public boolean hasCoordinatorOnlyDistribution()
+        {
+            return partitioningHandle.isPresent() && partitioningHandle.get().isCoordinatorOnly();
         }
 
         public void setOutputOrderingScheme(Optional<OrderingScheme> outputOrderingScheme)
