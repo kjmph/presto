@@ -33,6 +33,7 @@ import com.facebook.presto.sql.planner.iterative.rule.AddDistinctForSemiJoinBuil
 import com.facebook.presto.sql.planner.iterative.rule.AddExchangesBelowPartialAggregationOverGroupIdRuleSet;
 import com.facebook.presto.sql.planner.iterative.rule.AddIntermediateAggregations;
 import com.facebook.presto.sql.planner.iterative.rule.AddNotNullFiltersToJoinNode;
+import com.facebook.presto.sql.planner.iterative.rule.AnnotateJoinNodeWithUniqueKeys;
 import com.facebook.presto.sql.planner.iterative.rule.CombineApproxDistinctFunctions;
 import com.facebook.presto.sql.planner.iterative.rule.CombineApproxPercentileFunctions;
 import com.facebook.presto.sql.planner.iterative.rule.CreatePartialTopN;
@@ -70,6 +71,7 @@ import com.facebook.presto.sql.planner.iterative.rule.MultipleDistinctAggregatio
 import com.facebook.presto.sql.planner.iterative.rule.PickTableLayout;
 import com.facebook.presto.sql.planner.iterative.rule.PlanRemoteProjections;
 import com.facebook.presto.sql.planner.iterative.rule.PreAggregateBeforeGroupId;
+import com.facebook.presto.sql.planner.iterative.rule.PreAggregateCountThroughOuterJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PruneAggregationColumns;
 import com.facebook.presto.sql.planner.iterative.rule.PruneAggregationSourceColumns;
 import com.facebook.presto.sql.planner.iterative.rule.PruneCountAggregationOverScalar;
@@ -96,11 +98,13 @@ import com.facebook.presto.sql.planner.iterative.rule.PruneValuesColumns;
 import com.facebook.presto.sql.planner.iterative.rule.PruneWindowColumns;
 import com.facebook.presto.sql.planner.iterative.rule.PullConstantsAboveGroupBy;
 import com.facebook.presto.sql.planner.iterative.rule.PullUpExpressionInLambdaRules;
+import com.facebook.presto.sql.planner.iterative.rule.PushAggregationThroughCardinalityPreservingLookupJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushAggregationThroughDisjointUnion;
 import com.facebook.presto.sql.planner.iterative.rule.PushAggregationThroughOuterJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushDownDereferences;
 import com.facebook.presto.sql.planner.iterative.rule.PushDownFilterExpressionEvaluationThroughCrossJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushFilterThroughSelectingAggregation;
+import com.facebook.presto.sql.planner.iterative.rule.PushJoinKeyFilterBelowAggregation;
 import com.facebook.presto.sql.planner.iterative.rule.PushLimitThroughMarkDistinct;
 import com.facebook.presto.sql.planner.iterative.rule.PushLimitThroughOffset;
 import com.facebook.presto.sql.planner.iterative.rule.PushLimitThroughOuterJoin;
@@ -117,6 +121,7 @@ import com.facebook.presto.sql.planner.iterative.rule.PushRemoteExchangeThroughA
 import com.facebook.presto.sql.planner.iterative.rule.PushRemoteExchangeThroughGroupId;
 import com.facebook.presto.sql.planner.iterative.rule.PushSemiJoinThroughUnion;
 import com.facebook.presto.sql.planner.iterative.rule.PushTableWriteThroughUnion;
+import com.facebook.presto.sql.planner.iterative.rule.PushTopNThroughCardinalityPreservingJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushTopNThroughUnion;
 import com.facebook.presto.sql.planner.iterative.rule.PushdownThroughUnnest;
 import com.facebook.presto.sql.planner.iterative.rule.RandomizeSourceKeyInSemiJoin;
@@ -164,12 +169,16 @@ import com.facebook.presto.sql.planner.iterative.rule.SimplifyTopNWithConstantIn
 import com.facebook.presto.sql.planner.iterative.rule.SingleDistinctAggregationToGroupBy;
 import com.facebook.presto.sql.planner.iterative.rule.TransformCorrelatedInPredicateToJoin;
 import com.facebook.presto.sql.planner.iterative.rule.TransformCorrelatedLateralJoinToJoin;
+import com.facebook.presto.sql.planner.iterative.rule.TransformCorrelatedScalarAggregationToGroupedJoin;
 import com.facebook.presto.sql.planner.iterative.rule.TransformCorrelatedScalarAggregationToJoin;
 import com.facebook.presto.sql.planner.iterative.rule.TransformCorrelatedScalarSubquery;
 import com.facebook.presto.sql.planner.iterative.rule.TransformCorrelatedSingleRowSubqueryToProject;
+import com.facebook.presto.sql.planner.iterative.rule.TransformCountOverPairedNotEqualExistsToGroupedAggregation;
 import com.facebook.presto.sql.planner.iterative.rule.TransformDistinctInnerJoinToLeftEarlyOutJoin;
 import com.facebook.presto.sql.planner.iterative.rule.TransformDistinctInnerJoinToRightEarlyOutJoin;
+import com.facebook.presto.sql.planner.iterative.rule.TransformDuplicateFactSumToFilteredAggregation;
 import com.facebook.presto.sql.planner.iterative.rule.TransformExistsApplyToLateralNode;
+import com.facebook.presto.sql.planner.iterative.rule.TransformMaxAggregationSelfJoinToTopNRank;
 import com.facebook.presto.sql.planner.iterative.rule.TransformTableFunctionProcessorToTableScan;
 import com.facebook.presto.sql.planner.iterative.rule.TransformTableFunctionToTableFunctionProcessor;
 import com.facebook.presto.sql.planner.iterative.rule.TransformUncorrelatedInPredicateSubqueryToDistinctInnerJoin;
@@ -611,6 +620,7 @@ public class PlanOptimizers
                                 new TransformUncorrelatedLateralToJoin(),
                                 new TransformUncorrelatedInPredicateSubqueryToDistinctInnerJoin(),
                                 new TransformUncorrelatedInPredicateSubqueryToSemiJoin(),
+                                new TransformCorrelatedScalarAggregationToGroupedJoin(metadata.getFunctionAndTypeManager()),
                                 new TransformCorrelatedScalarAggregationToJoin(metadata.getFunctionAndTypeManager()),
                                 new TransformCorrelatedLateralJoinToJoin(metadata.getFunctionAndTypeManager()))),
                 new IterativeOptimizer(
@@ -775,6 +785,12 @@ public class PlanOptimizers
                                 new RemoveRedundantDistinctLimit(),
                                 new RemoveRedundantAggregateDistinct(),
                                 new RemoveRedundantIdentityProjections(),
+                                new TransformMaxAggregationSelfJoinToTopNRank(metadata.getFunctionAndTypeManager()),
+                                new TransformDuplicateFactSumToFilteredAggregation(metadata.getFunctionAndTypeManager()),
+                                new PushAggregationThroughCardinalityPreservingLookupJoin(metadata),
+                                new PushTopNThroughCardinalityPreservingJoin(metadata),
+                                new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager()),
+                                new PreAggregateCountThroughOuterJoin(metadata.getFunctionAndTypeManager()),
                                 new PushAggregationThroughOuterJoin(metadata.getFunctionAndTypeManager()))),
                 inlineProjections,
                 simplifyRowExpressionOptimizer, // Re-run the SimplifyExpressions to simplify any recomposed expressions from other optimizations
@@ -952,6 +968,7 @@ public class PlanOptimizers
                 statsCalculator,
                 estimatedExchangesCostCalculator,
                 ImmutableSet.of(
+                        new PushTopNThroughCardinalityPreservingJoin(metadata),
                         new CreatePartialTopN(),
                         new PushTopNThroughUnion())));
 
@@ -998,6 +1015,13 @@ public class PlanOptimizers
                         new RemoveRedundantDistinctLimit(),
                         new RemoveRedundantAggregateDistinct(),
                         new RemoveRedundantIdentityProjections(),
+                        new TransformMaxAggregationSelfJoinToTopNRank(metadata.getFunctionAndTypeManager()),
+                        new TransformDuplicateFactSumToFilteredAggregation(metadata.getFunctionAndTypeManager()),
+                        new PushAggregationThroughCardinalityPreservingLookupJoin(metadata),
+                        new PushTopNThroughCardinalityPreservingJoin(metadata),
+                        new TransformCountOverPairedNotEqualExistsToGroupedAggregation(metadata.getFunctionAndTypeManager()),
+                        new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager()),
+                        new PreAggregateCountThroughOuterJoin(metadata.getFunctionAndTypeManager()),
                         new PushAggregationThroughOuterJoin(metadata.getFunctionAndTypeManager()))));
 
         builder.add(new IterativeOptimizer(
@@ -1184,6 +1208,13 @@ public class PlanOptimizers
 
         // Precomputed hashes - this assumes that partitioning will not change
         builder.add(new HashGenerationOptimizer(metadata.getFunctionAndTypeManager()));
+        builder.add(new IterativeOptimizer(
+                metadata,
+                ruleStats,
+                statsCalculator,
+                costCalculator,
+                Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
+                ImmutableSet.of(new AnnotateJoinNodeWithUniqueKeys())));
         builder.add(new IterativeOptimizer(
                 metadata,
                 ruleStats,

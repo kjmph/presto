@@ -51,6 +51,7 @@ import static com.facebook.presto.SystemSessionProperties.getPartialAggregationB
 import static com.facebook.presto.SystemSessionProperties.getPartialAggregationStrategy;
 import static com.facebook.presto.SystemSessionProperties.isStreamingForPartialAggregationEnabled;
 import static com.facebook.presto.SystemSessionProperties.usePartialAggregationHistory;
+import static com.facebook.presto.cost.AggregationStatsRule.groupBy;
 import static com.facebook.presto.cost.PartialAggregationStatsEstimate.isUnknown;
 import static com.facebook.presto.operator.aggregation.AggregationUtils.isDecomposable;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.FINAL;
@@ -74,6 +75,9 @@ import static java.util.Objects.requireNonNull;
 public class PushPartialAggregationThroughExchange
         implements Rule<AggregationNode>
 {
+    private static final double LARGE_SOURCE_PARTIAL_INPUT_BYTES = 64.0 * 1024 * 1024 * 1024;
+    private static final double LARGE_SOURCE_PARTIAL_SAVED_BYTES = 48.0 * 1024 * 1024 * 1024;
+
     private final FunctionAndTypeManager functionAndTypeManager;
     private final boolean nativeExecution;
     private String statsSource;
@@ -358,7 +362,33 @@ public class PushPartialAggregationThroughExchange
         double byteReductionThreshold = getPartialAggregationByteReductionThreshold(context.getSession());
 
         // calling this function means we are using a cost-based strategy for this optimization
-        return numberOfKeyCheck && confidenceLevel != LOW && outputSize > inputSize * byteReductionThreshold;
+        if (!(numberOfKeyCheck && confidenceLevel != LOW && outputSize > inputSize * byteReductionThreshold)) {
+            return false;
+        }
+
+        if (!usePartialAggregationHistory(context.getSession()) &&
+                aggregationNode.getStep() == PARTIAL &&
+                largeSourcePartialGroupedEstimateShowsReduction(aggregationNode, exchangeStats, inputSize, byteReductionThreshold)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean largeSourcePartialGroupedEstimateShowsReduction(
+            AggregationNode aggregationNode,
+            PlanNodeStatsEstimate sourceStats,
+            double inputSize,
+            double byteReductionThreshold)
+    {
+        if (aggregationNode.getGroupingKeys().size() != 1 || inputSize < LARGE_SOURCE_PARTIAL_INPUT_BYTES) {
+            return false;
+        }
+
+        PlanNodeStatsEstimate groupedStats = groupBy(sourceStats, aggregationNode.getGroupingKeys(), aggregationNode.getAggregations());
+        double groupedOutputSize = groupedStats.getOutputSizeInBytes(aggregationNode);
+        return groupedOutputSize <= inputSize * byteReductionThreshold &&
+                inputSize - groupedOutputSize >= LARGE_SOURCE_PARTIAL_SAVED_BYTES;
     }
 
     private static boolean isLambda(RowExpression rowExpression)

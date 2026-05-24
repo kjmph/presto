@@ -32,6 +32,7 @@ import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.analyzer.MetadataResolver;
 import com.facebook.presto.spi.analyzer.ViewDefinition;
 import com.facebook.presto.spi.analyzer.ViewDefinitionReferences;
+import com.facebook.presto.spi.constraints.ForeignKeyConstraint;
 import com.facebook.presto.spi.constraints.NotNullConstraint;
 import com.facebook.presto.spi.constraints.PrimaryKeyConstraint;
 import com.facebook.presto.spi.constraints.UniqueConstraint;
@@ -620,6 +621,17 @@ final class ShowQueriesRewrite
                                 return Optional.of(new ConstraintSpecification(constraint.getName(),
                                         constraint.getColumns().stream().collect(toImmutableList()),
                                         UNIQUE,
+                                        constraint.isEnabled(),
+                                        constraint.isRely(),
+                                        constraint.isEnforced()));
+                            }
+                            else if (constraint instanceof ForeignKeyConstraint) {
+                                ForeignKeyConstraint<?> foreignKeyConstraint = (ForeignKeyConstraint<?>) constraint;
+                                SchemaTableName referencedTable = foreignKeyConstraint.getReferencedTable();
+                                return Optional.of(new ConstraintSpecification(constraint.getName(),
+                                        constraint.getColumns().stream().collect(toImmutableList()),
+                                        QualifiedName.of(referencedTable.getSchemaName(), referencedTable.getTableName()),
+                                        foreignKeyConstraint.getReferencedColumns().stream().collect(toImmutableList()),
                                         constraint.isEnabled(),
                                         constraint.isRely(),
                                         constraint.isEnforced()));

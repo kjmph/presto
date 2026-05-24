@@ -56,11 +56,13 @@ public class ThriftHiveMetastoreStats
     private final HiveMetastoreApiStats lock = new HiveMetastoreApiStats();
     private final HiveMetastoreApiStats unlock = new HiveMetastoreApiStats();
     private final HiveMetastoreApiStats getPrimaryKey = new HiveMetastoreApiStats();
+    private final HiveMetastoreApiStats getForeignKeyConstraints = new HiveMetastoreApiStats();
     private final HiveMetastoreApiStats getUniqueConstraints = new HiveMetastoreApiStats();
     private final HiveMetastoreApiStats getNotNullConstraints = new HiveMetastoreApiStats();
     private final HiveMetastoreApiStats dropConstraint = new HiveMetastoreApiStats();
     private final HiveMetastoreApiStats addUniqueConstraint = new HiveMetastoreApiStats();
     private final HiveMetastoreApiStats addPrimaryKeyConstraint = new HiveMetastoreApiStats();
+    private final HiveMetastoreApiStats addForeignKeyConstraint = new HiveMetastoreApiStats();
     private final HiveMetastoreApiStats addNotNullConstraint = new HiveMetastoreApiStats();
 
     @Managed
@@ -334,6 +336,13 @@ public class ThriftHiveMetastoreStats
 
     @Managed
     @Nested
+    public HiveMetastoreApiStats getGetForeignKeyConstraints()
+    {
+        return getForeignKeyConstraints;
+    }
+
+    @Managed
+    @Nested
     public HiveMetastoreApiStats getGetNotNullConstraints()
     {
         return getNotNullConstraints;
@@ -358,6 +367,13 @@ public class ThriftHiveMetastoreStats
     public HiveMetastoreApiStats getAddPrimaryKeyConstraint()
     {
         return addPrimaryKeyConstraint;
+    }
+
+    @Managed
+    @Nested
+    public HiveMetastoreApiStats getAddForeignKeyConstraint()
+    {
+        return addForeignKeyConstraint;
     }
 
     @Managed

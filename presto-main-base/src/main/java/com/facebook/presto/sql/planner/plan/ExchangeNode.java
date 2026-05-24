@@ -14,6 +14,8 @@
 package com.facebook.presto.sql.planner.plan;
 
 import com.facebook.presto.spi.SourceLocation;
+import com.facebook.presto.spi.plan.LogicalProperties;
+import com.facebook.presto.spi.plan.LogicalPropertiesProvider;
 import com.facebook.presto.spi.plan.OrderingScheme;
 import com.facebook.presto.spi.plan.Partitioning;
 import com.facebook.presto.spi.plan.PartitioningHandle;
@@ -328,6 +330,13 @@ public class ExchangeNode
     public List<VariableReferenceExpression> getOutputVariables()
     {
         return partitioningScheme.getOutputLayout();
+    }
+
+    @Override
+    public LogicalProperties computeLogicalProperties(LogicalPropertiesProvider logicalPropertiesProvider)
+    {
+        requireNonNull(logicalPropertiesProvider, "logicalPropertiesProvider cannot be null.");
+        return logicalPropertiesProvider.getExchangeProperties(this);
     }
 
     @JsonProperty

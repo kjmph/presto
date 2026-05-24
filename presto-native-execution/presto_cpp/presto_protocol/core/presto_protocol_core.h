@@ -1683,6 +1683,8 @@ struct JoinNode : public PlanNode {
   std::shared_ptr<VariableReferenceExpression> rightHashVariable = {};
   std::shared_ptr<JoinDistributionType> distributionType = {};
   Map<String, VariableReferenceExpression> dynamicFilters = {};
+  bool leftKeysUnique = {};
+  bool rightKeysUnique = {};
 
   JoinNode() noexcept;
 };

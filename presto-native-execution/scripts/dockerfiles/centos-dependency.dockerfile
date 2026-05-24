@@ -42,9 +42,25 @@ RUN bash -c "mkdir build && \
                  source ../velox/scripts/setup-centos-adapters.sh && \
                  install_adapters && \
                  install_clang15 && \
-                 install_cuda ${CUDA_VERSION} && \
+                 install_cuda ${CUDA_VERSION}) && \
+    rm -rf build"
+
+ARG UCX_LOCAL_SOURCE=scripts
+ARG UCX_LOCAL_SOURCE_HASH=none
+RUN --mount=type=bind,source=${UCX_LOCAL_SOURCE},target=/local_ucx_source,ro \
+    bash -c "mkdir build && \
+    echo UCX_LOCAL_SOURCE_HASH=${UCX_LOCAL_SOURCE_HASH} && \
+    (cd build && source ../velox/scripts/setup-centos9.sh && \
+                 export UCX_LOCAL_SOURCE=/local_ucx_source && \
+                 source ../velox/scripts/setup-centos-adapters.sh && \
                  install_ucx) && \
     rm -rf build"
+
+RUN mkdir -p /opt/presto-ucx-build && \
+    printf '%s\n' "${UCX_VERSION}" > /opt/presto-ucx-build/requested_version && \
+    printf '%s\n' "${UCX_LOCAL_SOURCE_HASH}" > /opt/presto-ucx-build/local_source_hash && \
+    (ucx_info -v 2>&1 || true) > /opt/presto-ucx-build/ucx_info_v.txt && \
+    (ldconfig && ldconfig -p | grep -E 'libuc[pst]|libucs' 2>&1 || true) > /opt/presto-ucx-build/ldconfig_ucx.txt
 
 # put CUDA binaries on the PATH
 ENV PATH=/usr/local/cuda/bin:${PATH}

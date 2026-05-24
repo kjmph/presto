@@ -6632,6 +6632,20 @@ void to_json(json& j, const JoinNode& p) {
       "JoinNode",
       "Map<String, VariableReferenceExpression>",
       "dynamicFilters");
+  to_json_key(
+      j,
+      "leftKeysUnique",
+      p.leftKeysUnique,
+      "JoinNode",
+      "bool",
+      "leftKeysUnique");
+  to_json_key(
+      j,
+      "rightKeysUnique",
+      p.rightKeysUnique,
+      "JoinNode",
+      "bool",
+      "rightKeysUnique");
 }
 
 void from_json(const json& j, JoinNode& p) {
@@ -6689,6 +6703,24 @@ void from_json(const json& j, JoinNode& p) {
       "JoinNode",
       "Map<String, VariableReferenceExpression>",
       "dynamicFilters");
+  if (j.count("leftKeysUnique")) {
+    from_json_key(
+        j,
+        "leftKeysUnique",
+        p.leftKeysUnique,
+        "JoinNode",
+        "bool",
+        "leftKeysUnique");
+  }
+  if (j.count("rightKeysUnique")) {
+    from_json_key(
+        j,
+        "rightKeysUnique",
+        p.rightKeysUnique,
+        "JoinNode",
+        "bool",
+        "rightKeysUnique");
+  }
 }
 } // namespace facebook::presto::protocol
 namespace facebook::presto::protocol {
