@@ -425,17 +425,9 @@ public abstract class BasePlanFragmenter
     {
         checkArgument(exchange.getScope() == REMOTE_STREAMING, "Unexpected exchange scope: %s", exchange.getScope());
 
-        // Use ANY (e.g. UCX) for unordered worker-to-worker exchanges, including
-        // unordered gather exchanges. Ordered edges remain on HTTP because the
-        // native worker's UCX path does not preserve the coordinator-visible
-        // ordering contract.
-        if (exchange.getOrderingScheme().isPresent() || exchange.isEnsureSourceOrdering()) {
-            return TransportType.HTTP;
-        }
-
-        // Coordinator-only child fragments and coordinator-bound consumers must
-        // use HTTP because the coordinator does not participate in native UCX
-        // data exchange.
+        // Use ANY (e.g. UCX) for worker-to-worker exchanges. Coordinator-only
+        // child fragments and coordinator-bound consumers must use HTTP because
+        // the coordinator does not participate in native UCX data exchange.
         if (exchange.getSources().stream().anyMatch(PlannerUtils::containsCoordinatorOnlyNode) ||
                 parentProperties.hasCoordinatorOnlyDistribution()) {
             return TransportType.HTTP;
