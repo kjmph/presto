@@ -1685,6 +1685,8 @@ struct JoinNode : public PlanNode {
   Map<String, VariableReferenceExpression> dynamicFilters = {};
   bool leftKeysUnique = {};
   bool rightKeysUnique = {};
+  bool leftKeysNonNull = {};
+  bool rightKeysNonNull = {};
 
   JoinNode() noexcept;
 };

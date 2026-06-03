@@ -37,6 +37,49 @@ void testJsonRoundTripFile(const std::string& filename) {
       "/github/presto-trunk/presto-native-execution/presto_cpp/presto_protocol/tests/data/",
       filename)));
 }
+
+std::string joinNodeJson() {
+  return R"({
+    "@type": ".JoinNode",
+    "id": "join",
+    "type": "INNER",
+    "left": {
+      "@type": ".ValuesNode",
+      "id": "left",
+      "outputVariables": [
+        {"@type": "variable", "name": "l_orderkey", "type": "bigint"}
+      ],
+      "rows": []
+    },
+    "right": {
+      "@type": ".ValuesNode",
+      "id": "right",
+      "outputVariables": [
+        {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+      ],
+      "rows": []
+    },
+    "criteria": [
+      {
+        "left": {"@type": "variable", "name": "l_orderkey", "type": "bigint"},
+        "right": {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+      }
+    ],
+    "outputVariables": [
+      {"@type": "variable", "name": "l_orderkey", "type": "bigint"},
+      {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+    ],
+    "filter": null,
+    "leftHashVariable": null,
+    "rightHashVariable": null,
+    "distributionType": null,
+    "dynamicFilters": {},
+    "leftKeysUnique": true,
+    "rightKeysUnique": true,
+    "leftKeysNonNull": true,
+    "rightKeysNonNull": false
+  })";
+}
 } // namespace
 
 class TestPlanNodes : public ::testing::Test {};
@@ -55,6 +98,37 @@ TEST_F(TestPlanNodes, TestOutputNode) {
 
 TEST_F(TestPlanNodes, TestValuesNode) {
   testJsonRoundTripFile<protocol::ValuesNode>("ValuesNode.json");
+}
+
+TEST_F(TestPlanNodes, TestJoinNodeUniqueKeys) {
+  json j = json::parse(joinNodeJson());
+  protocol::JoinNode node = j;
+
+  ASSERT_TRUE(node.leftKeysUnique);
+  ASSERT_TRUE(node.rightKeysUnique);
+  ASSERT_TRUE(node.leftKeysNonNull);
+  ASSERT_FALSE(node.rightKeysNonNull);
+
+  json r = node;
+  ASSERT_TRUE(r["leftKeysUnique"].get<bool>());
+  ASSERT_TRUE(r["rightKeysUnique"].get<bool>());
+  ASSERT_TRUE(r["leftKeysNonNull"].get<bool>());
+  ASSERT_FALSE(r["rightKeysNonNull"].get<bool>());
+  testJsonRoundtrip(j, node);
+}
+
+TEST_F(TestPlanNodes, TestJoinNodeUniqueKeysAbsent) {
+  json j = json::parse(joinNodeJson());
+  j.erase("leftKeysUnique");
+  j.erase("rightKeysUnique");
+  j.erase("leftKeysNonNull");
+  j.erase("rightKeysNonNull");
+
+  protocol::JoinNode node = j;
+  ASSERT_FALSE(node.leftKeysUnique);
+  ASSERT_FALSE(node.rightKeysUnique);
+  ASSERT_FALSE(node.leftKeysNonNull);
+  ASSERT_FALSE(node.rightKeysNonNull);
 }
 
 TEST_F(TestPlanNodes, TestRemoteSourceNodeTransportTypeAny) {

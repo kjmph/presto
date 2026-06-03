@@ -51,6 +51,22 @@ core::PlanFragment assertToVeloxFragment(
       prestoPlan, nullptr, "20201107_130540_00011_wrpkw.1.2.3");
 }
 
+core::PlanFragment assertToVeloxFragmentFromJson(
+    const std::string& fragment,
+    memory::MemoryPool* pool = nullptr) {
+  protocol::PlanFragment prestoPlan = json::parse(fragment);
+  std::shared_ptr<memory::MemoryPool> poolPtr;
+  if (pool == nullptr) {
+    poolPtr = memory::deprecatedAddDefaultLeafMemoryPool();
+    pool = poolPtr.get();
+  }
+
+  auto queryCtx = core::QueryCtx::create();
+  VeloxInteractiveQueryPlanConverter converter(queryCtx.get(), pool);
+  return converter.toVeloxQueryPlan(
+      prestoPlan, nullptr, "20201107_130540_00011_wrpkw.1.2.3");
+}
+
 std::shared_ptr<const core::PlanNode> assertToVeloxQueryPlan(
     const std::string& fileName,
     memory::MemoryPool* pool = nullptr) {
@@ -77,6 +93,52 @@ std::shared_ptr<const core::PlanNode> assertToBatchVeloxQueryPlan(
       .toVeloxQueryPlan(
           prestoPlan, nullptr, "20201107_130540_00011_wrpkw.1.2.3")
       .planNode;
+}
+
+std::string joinPlanFragmentJson() {
+  return R"({
+    "id": "fragment",
+    "root": {
+      "@type": ".JoinNode",
+      "id": "join",
+      "type": "INNER",
+      "left": {
+        "@type": ".ValuesNode",
+        "id": "left",
+        "outputVariables": [
+          {"@type": "variable", "name": "l_orderkey", "type": "bigint"}
+        ],
+        "rows": []
+      },
+      "right": {
+        "@type": ".ValuesNode",
+        "id": "right",
+        "outputVariables": [
+          {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+        ],
+        "rows": []
+      },
+      "criteria": [
+        {
+          "left": {"@type": "variable", "name": "l_orderkey", "type": "bigint"},
+          "right": {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+        }
+      ],
+      "outputVariables": [
+        {"@type": "variable", "name": "l_orderkey", "type": "bigint"},
+        {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+      ],
+      "filter": null,
+      "leftHashVariable": null,
+      "rightHashVariable": null,
+      "distributionType": null,
+      "dynamicFilters": {},
+      "leftKeysUnique": true,
+      "rightKeysUnique": false,
+      "leftKeysNonNull": true,
+      "rightKeysNonNull": false
+    }
+  })";
 }
 } // namespace
 
@@ -216,6 +278,16 @@ TEST_F(PlanConverterTest, indexSource) {
       tableScan->tableHandle().get());
   ASSERT_NE(tableHandle, nullptr);
   ASSERT_EQ(tableHandle->tableName(), "tpch.nation");
+}
+
+TEST_F(PlanConverterTest, joinUniqueKeys) {
+  auto plan = assertToVeloxFragmentFromJson(joinPlanFragmentJson()).planNode;
+  auto join = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
+  ASSERT_NE(join, nullptr);
+  EXPECT_TRUE(join->leftKeysUnique());
+  EXPECT_FALSE(join->rightKeysUnique());
+  EXPECT_TRUE(join->leftKeysNonNull());
+  EXPECT_FALSE(join->rightKeysNonNull());
 }
 
 TEST_F(PlanConverterTest, batchPlanConversion) {

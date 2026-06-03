@@ -1314,7 +1314,9 @@ core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
       useCachedHashTable(*node),
       /*nullAsValue=*/false,
       node->leftKeysUnique,
-      node->rightKeysUnique);
+      node->rightKeysUnique,
+      node->leftKeysNonNull,
+      node->rightKeysNonNull);
 }
 
 core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(

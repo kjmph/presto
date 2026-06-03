@@ -6646,6 +6646,20 @@ void to_json(json& j, const JoinNode& p) {
       "JoinNode",
       "bool",
       "rightKeysUnique");
+  to_json_key(
+      j,
+      "leftKeysNonNull",
+      p.leftKeysNonNull,
+      "JoinNode",
+      "bool",
+      "leftKeysNonNull");
+  to_json_key(
+      j,
+      "rightKeysNonNull",
+      p.rightKeysNonNull,
+      "JoinNode",
+      "bool",
+      "rightKeysNonNull");
 }
 
 void from_json(const json& j, JoinNode& p) {
@@ -6720,6 +6734,24 @@ void from_json(const json& j, JoinNode& p) {
         "JoinNode",
         "bool",
         "rightKeysUnique");
+  }
+  if (j.count("leftKeysNonNull")) {
+    from_json_key(
+        j,
+        "leftKeysNonNull",
+        p.leftKeysNonNull,
+        "JoinNode",
+        "bool",
+        "leftKeysNonNull");
+  }
+  if (j.count("rightKeysNonNull")) {
+    from_json_key(
+        j,
+        "rightKeysNonNull",
+        p.rightKeysNonNull,
+        "JoinNode",
+        "bool",
+        "rightKeysNonNull");
   }
 }
 } // namespace facebook::presto::protocol
