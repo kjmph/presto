@@ -77,7 +77,43 @@ std::string joinNodeJson() {
     "leftKeysUnique": true,
     "rightKeysUnique": true,
     "leftKeysNonNull": true,
-    "rightKeysNonNull": false
+    "rightKeysNonNull": false,
+    "leftKeysCoveredByRightKeys": true,
+    "rightKeysCoveredByLeftKeys": false
+  })";
+}
+
+std::string semiJoinNodeJson() {
+  return R"({
+    "@type": ".SemiJoinNode",
+    "id": "semi_join",
+    "source": {
+      "@type": ".ValuesNode",
+      "id": "source",
+      "outputVariables": [
+        {"@type": "variable", "name": "l_orderkey", "type": "bigint"}
+      ],
+      "rows": []
+    },
+    "filteringSource": {
+      "@type": ".ValuesNode",
+      "id": "filtering",
+      "outputVariables": [
+        {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+      ],
+      "rows": []
+    },
+    "sourceJoinVariable": {"@type": "variable", "name": "l_orderkey", "type": "bigint"},
+    "filteringSourceJoinVariable": {"@type": "variable", "name": "r_orderkey", "type": "bigint"},
+    "semiJoinOutput": {"@type": "variable", "name": "match", "type": "boolean"},
+    "sourceHashVariable": null,
+    "filteringSourceHashVariable": null,
+    "distributionType": null,
+    "dynamicFilters": {},
+    "sourceKeyUnique": true,
+    "filteringSourceKeyUnique": false,
+    "sourceKeyNonNull": true,
+    "filteringSourceKeyNonNull": false
   })";
 }
 } // namespace
@@ -108,12 +144,16 @@ TEST_F(TestPlanNodes, TestJoinNodeUniqueKeys) {
   ASSERT_TRUE(node.rightKeysUnique);
   ASSERT_TRUE(node.leftKeysNonNull);
   ASSERT_FALSE(node.rightKeysNonNull);
+  ASSERT_TRUE(node.leftKeysCoveredByRightKeys);
+  ASSERT_FALSE(node.rightKeysCoveredByLeftKeys);
 
   json r = node;
   ASSERT_TRUE(r["leftKeysUnique"].get<bool>());
   ASSERT_TRUE(r["rightKeysUnique"].get<bool>());
   ASSERT_TRUE(r["leftKeysNonNull"].get<bool>());
   ASSERT_FALSE(r["rightKeysNonNull"].get<bool>());
+  ASSERT_TRUE(r["leftKeysCoveredByRightKeys"].get<bool>());
+  ASSERT_FALSE(r["rightKeysCoveredByLeftKeys"].get<bool>());
   testJsonRoundtrip(j, node);
 }
 
@@ -123,12 +163,47 @@ TEST_F(TestPlanNodes, TestJoinNodeUniqueKeysAbsent) {
   j.erase("rightKeysUnique");
   j.erase("leftKeysNonNull");
   j.erase("rightKeysNonNull");
+  j.erase("leftKeysCoveredByRightKeys");
+  j.erase("rightKeysCoveredByLeftKeys");
 
   protocol::JoinNode node = j;
   ASSERT_FALSE(node.leftKeysUnique);
   ASSERT_FALSE(node.rightKeysUnique);
   ASSERT_FALSE(node.leftKeysNonNull);
   ASSERT_FALSE(node.rightKeysNonNull);
+  ASSERT_FALSE(node.leftKeysCoveredByRightKeys);
+  ASSERT_FALSE(node.rightKeysCoveredByLeftKeys);
+}
+
+TEST_F(TestPlanNodes, TestSemiJoinNodeUniqueKeys) {
+  json j = json::parse(semiJoinNodeJson());
+  protocol::SemiJoinNode node = j;
+
+  ASSERT_TRUE(node.sourceKeyUnique);
+  ASSERT_FALSE(node.filteringSourceKeyUnique);
+  ASSERT_TRUE(node.sourceKeyNonNull);
+  ASSERT_FALSE(node.filteringSourceKeyNonNull);
+
+  json r = node;
+  ASSERT_TRUE(r["sourceKeyUnique"].get<bool>());
+  ASSERT_FALSE(r["filteringSourceKeyUnique"].get<bool>());
+  ASSERT_TRUE(r["sourceKeyNonNull"].get<bool>());
+  ASSERT_FALSE(r["filteringSourceKeyNonNull"].get<bool>());
+  testJsonRoundtrip(j, node);
+}
+
+TEST_F(TestPlanNodes, TestSemiJoinNodeUniqueKeysAbsent) {
+  json j = json::parse(semiJoinNodeJson());
+  j.erase("sourceKeyUnique");
+  j.erase("filteringSourceKeyUnique");
+  j.erase("sourceKeyNonNull");
+  j.erase("filteringSourceKeyNonNull");
+
+  protocol::SemiJoinNode node = j;
+  ASSERT_FALSE(node.sourceKeyUnique);
+  ASSERT_FALSE(node.filteringSourceKeyUnique);
+  ASSERT_FALSE(node.sourceKeyNonNull);
+  ASSERT_FALSE(node.filteringSourceKeyNonNull);
 }
 
 TEST_F(TestPlanNodes, TestRemoteSourceNodeTransportTypeAny) {

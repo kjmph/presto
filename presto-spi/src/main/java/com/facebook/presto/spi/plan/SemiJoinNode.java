@@ -41,6 +41,10 @@ public final class SemiJoinNode
     private final Optional<VariableReferenceExpression> filteringSourceHashVariable;
     private final Optional<DistributionType> distributionType;
     private final Map<String, VariableReferenceExpression> dynamicFilters;
+    private final boolean sourceKeyUnique;
+    private final boolean filteringSourceKeyUnique;
+    private final boolean sourceKeyNonNull;
+    private final boolean filteringSourceKeyNonNull;
 
     @JsonCreator
     public SemiJoinNode(
@@ -54,9 +58,29 @@ public final class SemiJoinNode
             @JsonProperty("sourceHashVariable") Optional<VariableReferenceExpression> sourceHashVariable,
             @JsonProperty("filteringSourceHashVariable") Optional<VariableReferenceExpression> filteringSourceHashVariable,
             @JsonProperty("distributionType") Optional<DistributionType> distributionType,
-            @JsonProperty("dynamicFilters") Map<String, VariableReferenceExpression> dynamicFilters)
+            @JsonProperty("dynamicFilters") Map<String, VariableReferenceExpression> dynamicFilters,
+            @JsonProperty("sourceKeyUnique") boolean sourceKeyUnique,
+            @JsonProperty("filteringSourceKeyUnique") boolean filteringSourceKeyUnique,
+            @JsonProperty("sourceKeyNonNull") boolean sourceKeyNonNull,
+            @JsonProperty("filteringSourceKeyNonNull") boolean filteringSourceKeyNonNull)
     {
-        this(sourceLocation, id, Optional.empty(), source, filteringSource, sourceJoinVariable, filteringSourceJoinVariable, semiJoinOutput, sourceHashVariable, filteringSourceHashVariable, distributionType, dynamicFilters);
+        this(sourceLocation, id, Optional.empty(), source, filteringSource, sourceJoinVariable, filteringSourceJoinVariable, semiJoinOutput, sourceHashVariable, filteringSourceHashVariable, distributionType, dynamicFilters, sourceKeyUnique, filteringSourceKeyUnique, sourceKeyNonNull, filteringSourceKeyNonNull);
+    }
+
+    public SemiJoinNode(
+            Optional<SourceLocation> sourceLocation,
+            PlanNodeId id,
+            PlanNode source,
+            PlanNode filteringSource,
+            VariableReferenceExpression sourceJoinVariable,
+            VariableReferenceExpression filteringSourceJoinVariable,
+            VariableReferenceExpression semiJoinOutput,
+            Optional<VariableReferenceExpression> sourceHashVariable,
+            Optional<VariableReferenceExpression> filteringSourceHashVariable,
+            Optional<DistributionType> distributionType,
+            Map<String, VariableReferenceExpression> dynamicFilters)
+    {
+        this(sourceLocation, id, Optional.empty(), source, filteringSource, sourceJoinVariable, filteringSourceJoinVariable, semiJoinOutput, sourceHashVariable, filteringSourceHashVariable, distributionType, dynamicFilters, false, false, false, false);
     }
 
     public SemiJoinNode(
@@ -73,6 +97,27 @@ public final class SemiJoinNode
             Optional<DistributionType> distributionType,
             Map<String, VariableReferenceExpression> dynamicFilters)
     {
+        this(sourceLocation, id, statsEquivalentPlanNode, source, filteringSource, sourceJoinVariable, filteringSourceJoinVariable, semiJoinOutput, sourceHashVariable, filteringSourceHashVariable, distributionType, dynamicFilters, false, false, false, false);
+    }
+
+    public SemiJoinNode(
+            Optional<SourceLocation> sourceLocation,
+            PlanNodeId id,
+            Optional<PlanNode> statsEquivalentPlanNode,
+            PlanNode source,
+            PlanNode filteringSource,
+            VariableReferenceExpression sourceJoinVariable,
+            VariableReferenceExpression filteringSourceJoinVariable,
+            VariableReferenceExpression semiJoinOutput,
+            Optional<VariableReferenceExpression> sourceHashVariable,
+            Optional<VariableReferenceExpression> filteringSourceHashVariable,
+            Optional<DistributionType> distributionType,
+            Map<String, VariableReferenceExpression> dynamicFilters,
+            boolean sourceKeyUnique,
+            boolean filteringSourceKeyUnique,
+            boolean sourceKeyNonNull,
+            boolean filteringSourceKeyNonNull)
+    {
         super(sourceLocation, id, statsEquivalentPlanNode);
         this.source = requireNonNull(source, "source is null");
         this.filteringSource = requireNonNull(filteringSource, "filteringSource is null");
@@ -83,6 +128,10 @@ public final class SemiJoinNode
         this.filteringSourceHashVariable = requireNonNull(filteringSourceHashVariable, "filteringSourceHashVariable is null");
         this.distributionType = requireNonNull(distributionType, "distributionType is null");
         this.dynamicFilters = requireNonNull(dynamicFilters, "dynamicFilters is null");
+        this.sourceKeyUnique = sourceKeyUnique;
+        this.filteringSourceKeyUnique = filteringSourceKeyUnique;
+        this.sourceKeyNonNull = sourceKeyNonNull;
+        this.filteringSourceKeyNonNull = filteringSourceKeyNonNull;
 
         checkArgument(source.getOutputVariables().contains(sourceJoinVariable), "Source does not contain join symbol");
         checkArgument(filteringSource.getOutputVariables().contains(filteringSourceJoinVariable), "Filtering source does not contain filtering join symbol");
@@ -161,6 +210,30 @@ public final class SemiJoinNode
         return dynamicFilters;
     }
 
+    @JsonProperty("sourceKeyUnique")
+    public boolean isSourceKeyUnique()
+    {
+        return sourceKeyUnique;
+    }
+
+    @JsonProperty("filteringSourceKeyUnique")
+    public boolean isFilteringSourceKeyUnique()
+    {
+        return filteringSourceKeyUnique;
+    }
+
+    @JsonProperty("sourceKeyNonNull")
+    public boolean isSourceKeyNonNull()
+    {
+        return sourceKeyNonNull;
+    }
+
+    @JsonProperty("filteringSourceKeyNonNull")
+    public boolean isFilteringSourceKeyNonNull()
+    {
+        return filteringSourceKeyNonNull;
+    }
+
     @Override
     public List<PlanNode> getSources()
     {
@@ -201,7 +274,11 @@ public final class SemiJoinNode
                 sourceHashVariable,
                 filteringSourceHashVariable,
                 distributionType,
-                dynamicFilters);
+                dynamicFilters,
+                sourceKeyUnique,
+                filteringSourceKeyUnique,
+                sourceKeyNonNull,
+                filteringSourceKeyNonNull);
     }
 
     @Override
@@ -219,7 +296,11 @@ public final class SemiJoinNode
                 sourceHashVariable,
                 filteringSourceHashVariable,
                 distributionType,
-                dynamicFilters);
+                dynamicFilters,
+                sourceKeyUnique,
+                filteringSourceKeyUnique,
+                sourceKeyNonNull,
+                filteringSourceKeyNonNull);
     }
 
     @Override
@@ -242,6 +323,31 @@ public final class SemiJoinNode
                 sourceHashVariable,
                 filteringSourceHashVariable,
                 Optional.of(distributionType),
-                dynamicFilters);
+                dynamicFilters,
+                sourceKeyUnique,
+                filteringSourceKeyUnique,
+                sourceKeyNonNull,
+                filteringSourceKeyNonNull);
+    }
+
+    public SemiJoinNode withKeyProperties(boolean sourceKeyUnique, boolean filteringSourceKeyUnique, boolean sourceKeyNonNull, boolean filteringSourceKeyNonNull)
+    {
+        return new SemiJoinNode(
+                getSourceLocation(),
+                getId(),
+                getStatsEquivalentPlanNode(),
+                source,
+                filteringSource,
+                sourceJoinVariable,
+                filteringSourceJoinVariable,
+                semiJoinOutput,
+                sourceHashVariable,
+                filteringSourceHashVariable,
+                distributionType,
+                dynamicFilters,
+                sourceKeyUnique,
+                filteringSourceKeyUnique,
+                sourceKeyNonNull,
+                filteringSourceKeyNonNull);
     }
 }

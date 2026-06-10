@@ -63,6 +63,8 @@ public final class JoinNode
     private final boolean rightKeysUnique;
     private final boolean leftKeysNonNull;
     private final boolean rightKeysNonNull;
+    private final boolean leftKeysCoveredByRightKeys;
+    private final boolean rightKeysCoveredByLeftKeys;
 
     @JsonCreator
     public JoinNode(
@@ -81,9 +83,11 @@ public final class JoinNode
             @JsonProperty("leftKeysUnique") boolean leftKeysUnique,
             @JsonProperty("rightKeysUnique") boolean rightKeysUnique,
             @JsonProperty("leftKeysNonNull") boolean leftKeysNonNull,
-            @JsonProperty("rightKeysNonNull") boolean rightKeysNonNull)
+            @JsonProperty("rightKeysNonNull") boolean rightKeysNonNull,
+            @JsonProperty("leftKeysCoveredByRightKeys") boolean leftKeysCoveredByRightKeys,
+            @JsonProperty("rightKeysCoveredByLeftKeys") boolean rightKeysCoveredByLeftKeys)
     {
-        this(sourceLocation, id, Optional.empty(), type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull);
+        this(sourceLocation, id, Optional.empty(), type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull, leftKeysCoveredByRightKeys, rightKeysCoveredByLeftKeys);
     }
 
     public JoinNode(
@@ -100,7 +104,7 @@ public final class JoinNode
             Optional<JoinDistributionType> distributionType,
             Map<String, VariableReferenceExpression> dynamicFilters)
     {
-        this(sourceLocation, id, Optional.empty(), type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, false, false, false, false);
+        this(sourceLocation, id, Optional.empty(), type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, false, false, false, false, false, false);
     }
 
     public JoinNode(
@@ -118,7 +122,7 @@ public final class JoinNode
             Optional<JoinDistributionType> distributionType,
             Map<String, VariableReferenceExpression> dynamicFilters)
     {
-        this(sourceLocation, id, statsEquivalentPlanNode, type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, false, false, false, false);
+        this(sourceLocation, id, statsEquivalentPlanNode, type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, false, false, false, false, false, false);
     }
 
     public JoinNode(
@@ -138,7 +142,7 @@ public final class JoinNode
             boolean leftKeysUnique,
             boolean rightKeysUnique)
     {
-        this(sourceLocation, id, statsEquivalentPlanNode, type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, leftKeysUnique, rightKeysUnique, false, false);
+        this(sourceLocation, id, statsEquivalentPlanNode, type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, leftKeysUnique, rightKeysUnique, false, false, false, false);
     }
 
     public JoinNode(
@@ -158,7 +162,9 @@ public final class JoinNode
             boolean leftKeysUnique,
             boolean rightKeysUnique,
             boolean leftKeysNonNull,
-            boolean rightKeysNonNull)
+            boolean rightKeysNonNull,
+            boolean leftKeysCoveredByRightKeys,
+            boolean rightKeysCoveredByLeftKeys)
     {
         super(sourceLocation, id, statsEquivalentPlanNode);
         requireNonNull(type, "type is null");
@@ -189,6 +195,8 @@ public final class JoinNode
         this.rightKeysUnique = rightKeysUnique;
         this.leftKeysNonNull = leftKeysNonNull;
         this.rightKeysNonNull = rightKeysNonNull;
+        this.leftKeysCoveredByRightKeys = leftKeysCoveredByRightKeys;
+        this.rightKeysCoveredByLeftKeys = rightKeysCoveredByLeftKeys;
 
         checkLeftOutputVariablesBeforeRight(left.getOutputVariables(), outputVariables);
 
@@ -261,7 +269,9 @@ public final class JoinNode
                 rightKeysUnique,
                 leftKeysUnique,
                 rightKeysNonNull,
-                leftKeysNonNull);
+                leftKeysNonNull,
+                rightKeysCoveredByLeftKeys,
+                leftKeysCoveredByRightKeys);
     }
 
     public static JoinType flipType(JoinType type)
@@ -408,6 +418,18 @@ public final class JoinNode
         return rightKeysNonNull;
     }
 
+    @JsonProperty
+    public boolean isLeftKeysCoveredByRightKeys()
+    {
+        return leftKeysCoveredByRightKeys;
+    }
+
+    @JsonProperty
+    public boolean isRightKeysCoveredByLeftKeys()
+    {
+        return rightKeysCoveredByLeftKeys;
+    }
+
     @Override
     @JsonProperty
     public Map<String, VariableReferenceExpression> getDynamicFilters()
@@ -425,28 +447,39 @@ public final class JoinNode
     public PlanNode replaceChildren(List<PlanNode> newChildren)
     {
         checkArgument(newChildren.size() == 2, "expected newChildren to contain 2 nodes");
-        return new JoinNode(getSourceLocation(), getId(), getStatsEquivalentPlanNode(), type, newChildren.get(0), newChildren.get(1), criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull);
+        return new JoinNode(getSourceLocation(), getId(), getStatsEquivalentPlanNode(), type, newChildren.get(0), newChildren.get(1), criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull, leftKeysCoveredByRightKeys, rightKeysCoveredByLeftKeys);
     }
 
     @Override
     public PlanNode assignStatsEquivalentPlanNode(Optional<PlanNode> statsEquivalentPlanNode)
     {
-        return new JoinNode(getSourceLocation(), getId(), statsEquivalentPlanNode, type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull);
+        return new JoinNode(getSourceLocation(), getId(), statsEquivalentPlanNode, type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull, leftKeysCoveredByRightKeys, rightKeysCoveredByLeftKeys);
     }
 
     public JoinNode withDistributionType(JoinDistributionType distributionType)
     {
-        return new JoinNode(getSourceLocation(), getId(), getStatsEquivalentPlanNode(), type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, Optional.of(distributionType), dynamicFilters, leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull);
+        return new JoinNode(getSourceLocation(), getId(), getStatsEquivalentPlanNode(), type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, Optional.of(distributionType), dynamicFilters, leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull, leftKeysCoveredByRightKeys, rightKeysCoveredByLeftKeys);
     }
 
     public JoinNode withUniqueKeys(boolean leftKeysUnique, boolean rightKeysUnique)
     {
-        return withKeyProperties(leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull);
+        return withKeyProperties(leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull, leftKeysCoveredByRightKeys, rightKeysCoveredByLeftKeys);
     }
 
     public JoinNode withKeyProperties(boolean leftKeysUnique, boolean rightKeysUnique, boolean leftKeysNonNull, boolean rightKeysNonNull)
     {
-        return new JoinNode(getSourceLocation(), getId(), getStatsEquivalentPlanNode(), type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull);
+        return withKeyProperties(leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull, leftKeysCoveredByRightKeys, rightKeysCoveredByLeftKeys);
+    }
+
+    public JoinNode withKeyProperties(
+            boolean leftKeysUnique,
+            boolean rightKeysUnique,
+            boolean leftKeysNonNull,
+            boolean rightKeysNonNull,
+            boolean leftKeysCoveredByRightKeys,
+            boolean rightKeysCoveredByLeftKeys)
+    {
+        return new JoinNode(getSourceLocation(), getId(), getStatsEquivalentPlanNode(), type, left, right, criteria, outputVariables, filter, leftHashVariable, rightHashVariable, distributionType, dynamicFilters, leftKeysUnique, rightKeysUnique, leftKeysNonNull, rightKeysNonNull, leftKeysCoveredByRightKeys, rightKeysCoveredByLeftKeys);
     }
 
     public boolean isCrossJoin()

@@ -136,7 +136,46 @@ std::string joinPlanFragmentJson() {
       "leftKeysUnique": true,
       "rightKeysUnique": false,
       "leftKeysNonNull": true,
-      "rightKeysNonNull": false
+      "rightKeysNonNull": false,
+      "leftKeysCoveredByRightKeys": true,
+      "rightKeysCoveredByLeftKeys": false
+    }
+  })";
+}
+
+std::string semiJoinPlanFragmentJson() {
+  return R"({
+    "id": "fragment",
+    "root": {
+      "@type": ".SemiJoinNode",
+      "id": "semi_join",
+      "source": {
+        "@type": ".ValuesNode",
+        "id": "source",
+        "outputVariables": [
+          {"@type": "variable", "name": "l_orderkey", "type": "bigint"}
+        ],
+        "rows": []
+      },
+      "filteringSource": {
+        "@type": ".ValuesNode",
+        "id": "filtering",
+        "outputVariables": [
+          {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+        ],
+        "rows": []
+      },
+      "sourceJoinVariable": {"@type": "variable", "name": "l_orderkey", "type": "bigint"},
+      "filteringSourceJoinVariable": {"@type": "variable", "name": "r_orderkey", "type": "bigint"},
+      "semiJoinOutput": {"@type": "variable", "name": "match", "type": "boolean"},
+      "sourceHashVariable": null,
+      "filteringSourceHashVariable": null,
+      "distributionType": null,
+      "dynamicFilters": {},
+      "sourceKeyUnique": false,
+      "filteringSourceKeyUnique": true,
+      "sourceKeyNonNull": true,
+      "filteringSourceKeyNonNull": true
     }
   })";
 }
@@ -288,6 +327,24 @@ TEST_F(PlanConverterTest, joinUniqueKeys) {
   EXPECT_FALSE(join->rightKeysUnique());
   EXPECT_TRUE(join->leftKeysNonNull());
   EXPECT_FALSE(join->rightKeysNonNull());
+  EXPECT_TRUE(join->leftKeysCoveredByRightKeys());
+  EXPECT_FALSE(join->rightKeysCoveredByLeftKeys());
+}
+
+TEST_F(PlanConverterTest, semiJoinUniqueKeys) {
+  auto plan = assertToVeloxFragmentFromJson(semiJoinPlanFragmentJson()).planNode;
+  auto join = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
+  ASSERT_NE(join, nullptr);
+  EXPECT_EQ(join->joinType(), core::JoinType::kLeftSemiProject);
+  EXPECT_FALSE(join->leftKeysUnique());
+  EXPECT_TRUE(join->rightKeysUnique());
+  EXPECT_TRUE(join->leftKeysNonNull());
+  EXPECT_TRUE(join->rightKeysNonNull());
+
+  auto outputType = join->outputType();
+  ASSERT_EQ(outputType->size(), 2);
+  EXPECT_EQ(outputType->nameOf(0), "l_orderkey");
+  EXPECT_EQ(outputType->nameOf(1), "match");
 }
 
 TEST_F(PlanConverterTest, batchPlanConversion) {

@@ -6660,6 +6660,20 @@ void to_json(json& j, const JoinNode& p) {
       "JoinNode",
       "bool",
       "rightKeysNonNull");
+  to_json_key(
+      j,
+      "leftKeysCoveredByRightKeys",
+      p.leftKeysCoveredByRightKeys,
+      "JoinNode",
+      "bool",
+      "leftKeysCoveredByRightKeys");
+  to_json_key(
+      j,
+      "rightKeysCoveredByLeftKeys",
+      p.rightKeysCoveredByLeftKeys,
+      "JoinNode",
+      "bool",
+      "rightKeysCoveredByLeftKeys");
 }
 
 void from_json(const json& j, JoinNode& p) {
@@ -6752,6 +6766,24 @@ void from_json(const json& j, JoinNode& p) {
         "JoinNode",
         "bool",
         "rightKeysNonNull");
+  }
+  if (j.count("leftKeysCoveredByRightKeys")) {
+    from_json_key(
+        j,
+        "leftKeysCoveredByRightKeys",
+        p.leftKeysCoveredByRightKeys,
+        "JoinNode",
+        "bool",
+        "leftKeysCoveredByRightKeys");
+  }
+  if (j.count("rightKeysCoveredByLeftKeys")) {
+    from_json_key(
+        j,
+        "rightKeysCoveredByLeftKeys",
+        p.rightKeysCoveredByLeftKeys,
+        "JoinNode",
+        "bool",
+        "rightKeysCoveredByLeftKeys");
   }
 }
 } // namespace facebook::presto::protocol
@@ -10267,6 +10299,34 @@ void to_json(json& j, const SemiJoinNode& p) {
       "SemiJoinNode",
       "Map<String, VariableReferenceExpression>",
       "dynamicFilters");
+  to_json_key(
+      j,
+      "sourceKeyUnique",
+      p.sourceKeyUnique,
+      "SemiJoinNode",
+      "bool",
+      "sourceKeyUnique");
+  to_json_key(
+      j,
+      "filteringSourceKeyUnique",
+      p.filteringSourceKeyUnique,
+      "SemiJoinNode",
+      "bool",
+      "filteringSourceKeyUnique");
+  to_json_key(
+      j,
+      "sourceKeyNonNull",
+      p.sourceKeyNonNull,
+      "SemiJoinNode",
+      "bool",
+      "sourceKeyNonNull");
+  to_json_key(
+      j,
+      "filteringSourceKeyNonNull",
+      p.filteringSourceKeyNonNull,
+      "SemiJoinNode",
+      "bool",
+      "filteringSourceKeyNonNull");
 }
 
 void from_json(const json& j, SemiJoinNode& p) {
@@ -10329,6 +10389,42 @@ void from_json(const json& j, SemiJoinNode& p) {
       "SemiJoinNode",
       "Map<String, VariableReferenceExpression>",
       "dynamicFilters");
+  if (j.count("sourceKeyUnique")) {
+    from_json_key(
+        j,
+        "sourceKeyUnique",
+        p.sourceKeyUnique,
+        "SemiJoinNode",
+        "bool",
+        "sourceKeyUnique");
+  }
+  if (j.count("filteringSourceKeyUnique")) {
+    from_json_key(
+        j,
+        "filteringSourceKeyUnique",
+        p.filteringSourceKeyUnique,
+        "SemiJoinNode",
+        "bool",
+        "filteringSourceKeyUnique");
+  }
+  if (j.count("sourceKeyNonNull")) {
+    from_json_key(
+        j,
+        "sourceKeyNonNull",
+        p.sourceKeyNonNull,
+        "SemiJoinNode",
+        "bool",
+        "sourceKeyNonNull");
+  }
+  if (j.count("filteringSourceKeyNonNull")) {
+    from_json_key(
+        j,
+        "filteringSourceKeyNonNull",
+        p.filteringSourceKeyNonNull,
+        "SemiJoinNode",
+        "bool",
+        "filteringSourceKeyNonNull");
+  }
 }
 } // namespace facebook::presto::protocol
 namespace facebook::presto::protocol {

@@ -31,6 +31,8 @@ final class JoinUniqueKeyMatcher
     private final boolean rightKeysUnique;
     private final Optional<Boolean> leftKeysNonNull;
     private final Optional<Boolean> rightKeysNonNull;
+    private final Optional<Boolean> leftKeysCoveredByRightKeys;
+    private final Optional<Boolean> rightKeysCoveredByLeftKeys;
 
     JoinUniqueKeyMatcher(boolean leftKeysUnique, boolean rightKeysUnique)
     {
@@ -38,6 +40,8 @@ final class JoinUniqueKeyMatcher
         this.rightKeysUnique = rightKeysUnique;
         this.leftKeysNonNull = Optional.empty();
         this.rightKeysNonNull = Optional.empty();
+        this.leftKeysCoveredByRightKeys = Optional.empty();
+        this.rightKeysCoveredByLeftKeys = Optional.empty();
     }
 
     JoinUniqueKeyMatcher(boolean leftKeysUnique, boolean rightKeysUnique, boolean leftKeysNonNull, boolean rightKeysNonNull)
@@ -46,6 +50,24 @@ final class JoinUniqueKeyMatcher
         this.rightKeysUnique = rightKeysUnique;
         this.leftKeysNonNull = Optional.of(leftKeysNonNull);
         this.rightKeysNonNull = Optional.of(rightKeysNonNull);
+        this.leftKeysCoveredByRightKeys = Optional.empty();
+        this.rightKeysCoveredByLeftKeys = Optional.empty();
+    }
+
+    JoinUniqueKeyMatcher(
+            boolean leftKeysUnique,
+            boolean rightKeysUnique,
+            boolean leftKeysNonNull,
+            boolean rightKeysNonNull,
+            boolean leftKeysCoveredByRightKeys,
+            boolean rightKeysCoveredByLeftKeys)
+    {
+        this.leftKeysUnique = leftKeysUnique;
+        this.rightKeysUnique = rightKeysUnique;
+        this.leftKeysNonNull = Optional.of(leftKeysNonNull);
+        this.rightKeysNonNull = Optional.of(rightKeysNonNull);
+        this.leftKeysCoveredByRightKeys = Optional.of(leftKeysCoveredByRightKeys);
+        this.rightKeysCoveredByLeftKeys = Optional.of(rightKeysCoveredByLeftKeys);
     }
 
     @Override
@@ -61,7 +83,9 @@ final class JoinUniqueKeyMatcher
         if (joinNode.isLeftKeysUnique() != leftKeysUnique ||
                 joinNode.isRightKeysUnique() != rightKeysUnique ||
                 leftKeysNonNull.map(expected -> joinNode.isLeftKeysNonNull() != expected).orElse(false) ||
-                rightKeysNonNull.map(expected -> joinNode.isRightKeysNonNull() != expected).orElse(false)) {
+                rightKeysNonNull.map(expected -> joinNode.isRightKeysNonNull() != expected).orElse(false) ||
+                leftKeysCoveredByRightKeys.map(expected -> joinNode.isLeftKeysCoveredByRightKeys() != expected).orElse(false) ||
+                rightKeysCoveredByLeftKeys.map(expected -> joinNode.isRightKeysCoveredByLeftKeys() != expected).orElse(false)) {
             return NO_MATCH;
         }
         return MatchResult.match();
@@ -75,6 +99,8 @@ final class JoinUniqueKeyMatcher
                 .add("rightKeysUnique", rightKeysUnique)
                 .add("leftKeysNonNull", leftKeysNonNull)
                 .add("rightKeysNonNull", rightKeysNonNull)
+                .add("leftKeysCoveredByRightKeys", leftKeysCoveredByRightKeys)
+                .add("rightKeysCoveredByLeftKeys", rightKeysCoveredByLeftKeys)
                 .toString();
     }
 }

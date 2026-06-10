@@ -21,6 +21,7 @@ import org.testng.annotations.Test;
 import java.util.Optional;
 
 import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.plan.JoinType.INNER;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
@@ -31,6 +32,8 @@ public class TestJoinNode
             new VariableReferenceExpression(Optional.empty(), "left_key", BIGINT);
     private static final VariableReferenceExpression RIGHT_KEY =
             new VariableReferenceExpression(Optional.empty(), "right_key", BIGINT);
+    private static final VariableReferenceExpression SEMI_OUTPUT =
+            new VariableReferenceExpression(Optional.empty(), "match", BOOLEAN);
 
     @Test
     public void testFlipChildrenSwapsJoinKeyMetadata()
@@ -48,7 +51,7 @@ public class TestJoinNode
                 Optional.empty(),
                 Optional.empty(),
                 ImmutableMap.of())
-                .withKeyProperties(true, false, true, false);
+                .withKeyProperties(true, false, true, false, true, false);
 
         JoinNode flipped = join.flipChildren();
 
@@ -56,6 +59,40 @@ public class TestJoinNode
         assertTrue(flipped.isRightKeysUnique());
         assertFalse(flipped.isLeftKeysNonNull());
         assertTrue(flipped.isRightKeysNonNull());
+        assertFalse(flipped.isLeftKeysCoveredByRightKeys());
+        assertTrue(flipped.isRightKeysCoveredByLeftKeys());
+    }
+
+    @Test
+    public void testSemiJoinCopyPathsPreserveKeyMetadata()
+    {
+        SemiJoinNode semiJoin = new SemiJoinNode(
+                Optional.empty(),
+                new PlanNodeId("semi_join"),
+                valuesNode("source", LEFT_KEY),
+                valuesNode("filtering", RIGHT_KEY),
+                LEFT_KEY,
+                RIGHT_KEY,
+                SEMI_OUTPUT,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                ImmutableMap.of())
+                .withKeyProperties(true, false, true, false);
+
+        SemiJoinNode withDistribution = semiJoin.withDistributionType(SemiJoinNode.DistributionType.REPLICATED);
+        assertTrue(withDistribution.isSourceKeyUnique());
+        assertFalse(withDistribution.isFilteringSourceKeyUnique());
+        assertTrue(withDistribution.isSourceKeyNonNull());
+        assertFalse(withDistribution.isFilteringSourceKeyNonNull());
+
+        SemiJoinNode replaced = (SemiJoinNode) semiJoin.replaceChildren(ImmutableList.of(
+                valuesNode("replacement_source", LEFT_KEY),
+                valuesNode("replacement_filtering", RIGHT_KEY)));
+        assertTrue(replaced.isSourceKeyUnique());
+        assertFalse(replaced.isFilteringSourceKeyUnique());
+        assertTrue(replaced.isSourceKeyNonNull());
+        assertFalse(replaced.isFilteringSourceKeyNonNull());
     }
 
     private static ValuesNode valuesNode(

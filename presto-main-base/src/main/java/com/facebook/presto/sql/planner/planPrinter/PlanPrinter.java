@@ -571,6 +571,14 @@ public class PlanPrinter
             }
 
             node.getDistributionType().ifPresent(distributionType -> nodeOutput.appendDetailsLine("Distribution: %s", distributionType));
+            nodeOutput.appendDetailsLine(
+                    "Key properties: left(unique=%s, nonNull=%s, coveredByRight=%s), right(unique=%s, nonNull=%s, coveredByLeft=%s)",
+                    node.isLeftKeysUnique(),
+                    node.isLeftKeysNonNull(),
+                    node.isLeftKeysCoveredByRightKeys(),
+                    node.isRightKeysUnique(),
+                    node.isRightKeysNonNull(),
+                    node.isRightKeysCoveredByLeftKeys());
             if (!node.getDynamicFilters().isEmpty()) {
                 nodeOutput.appendDetails(getDynamicFilterAssignments(node));
             }
@@ -607,6 +615,12 @@ public class PlanPrinter
                             node.getFilteringSourceJoinVariable(),
                             formatHash(node.getSourceHashVariable(), node.getFilteringSourceHashVariable())));
             node.getDistributionType().ifPresent(distributionType -> nodeOutput.appendDetailsLine("Distribution: %s", distributionType));
+            nodeOutput.appendDetailsLine(
+                    "Key properties: source(unique=%s, nonNull=%s), filteringSource(unique=%s, nonNull=%s)",
+                    node.isSourceKeyUnique(),
+                    node.isSourceKeyNonNull(),
+                    node.isFilteringSourceKeyUnique(),
+                    node.isFilteringSourceKeyNonNull());
             if (!node.getDynamicFilters().isEmpty()) {
                 nodeOutput.appendDetails(getDynamicFilterAssignments(node));
             }

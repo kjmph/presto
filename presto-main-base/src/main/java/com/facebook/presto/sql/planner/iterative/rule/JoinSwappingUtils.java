@@ -131,7 +131,9 @@ public class JoinSwappingUtils
                 swapped.isLeftKeysUnique(),
                 swapped.isRightKeysUnique(),
                 swapped.isLeftKeysNonNull(),
-                swapped.isRightKeysNonNull());
+                swapped.isRightKeysNonNull(),
+                swapped.isLeftKeysCoveredByRightKeys(),
+                swapped.isRightKeysCoveredByLeftKeys());
 
         return Optional.of(newJoinNode);
     }

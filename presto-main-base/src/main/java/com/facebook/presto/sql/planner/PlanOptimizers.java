@@ -34,6 +34,7 @@ import com.facebook.presto.sql.planner.iterative.rule.AddExchangesBelowPartialAg
 import com.facebook.presto.sql.planner.iterative.rule.AddIntermediateAggregations;
 import com.facebook.presto.sql.planner.iterative.rule.AddNotNullFiltersToJoinNode;
 import com.facebook.presto.sql.planner.iterative.rule.AnnotateJoinNodeWithUniqueKeys;
+import com.facebook.presto.sql.planner.iterative.rule.AnnotateSemiJoinNodeWithUniqueKeys;
 import com.facebook.presto.sql.planner.iterative.rule.CombineApproxDistinctFunctions;
 import com.facebook.presto.sql.planner.iterative.rule.CombineApproxPercentileFunctions;
 import com.facebook.presto.sql.planner.iterative.rule.CreatePartialTopN;
@@ -179,6 +180,7 @@ import com.facebook.presto.sql.planner.iterative.rule.TransformDistinctInnerJoin
 import com.facebook.presto.sql.planner.iterative.rule.TransformDuplicateFactSumToFilteredAggregation;
 import com.facebook.presto.sql.planner.iterative.rule.TransformExistsApplyToLateralNode;
 import com.facebook.presto.sql.planner.iterative.rule.TransformMaxAggregationSelfJoinToTopNRank;
+import com.facebook.presto.sql.planner.iterative.rule.TransformMinAggregationJoinToWindow;
 import com.facebook.presto.sql.planner.iterative.rule.TransformTableFunctionProcessorToTableScan;
 import com.facebook.presto.sql.planner.iterative.rule.TransformTableFunctionToTableFunctionProcessor;
 import com.facebook.presto.sql.planner.iterative.rule.TransformUncorrelatedInPredicateSubqueryToDistinctInnerJoin;
@@ -786,6 +788,7 @@ public class PlanOptimizers
                                 new RemoveRedundantAggregateDistinct(),
                                 new RemoveRedundantIdentityProjections(),
                                 new TransformMaxAggregationSelfJoinToTopNRank(metadata.getFunctionAndTypeManager()),
+                                new TransformMinAggregationJoinToWindow(metadata.getFunctionAndTypeManager()),
                                 new TransformDuplicateFactSumToFilteredAggregation(metadata.getFunctionAndTypeManager()),
                                 new PushAggregationThroughCardinalityPreservingLookupJoin(metadata),
                                 new PushTopNThroughCardinalityPreservingJoin(metadata),
@@ -1016,6 +1019,7 @@ public class PlanOptimizers
                         new RemoveRedundantAggregateDistinct(),
                         new RemoveRedundantIdentityProjections(),
                         new TransformMaxAggregationSelfJoinToTopNRank(metadata.getFunctionAndTypeManager()),
+                        new TransformMinAggregationJoinToWindow(metadata.getFunctionAndTypeManager()),
                         new TransformDuplicateFactSumToFilteredAggregation(metadata.getFunctionAndTypeManager()),
                         new PushAggregationThroughCardinalityPreservingLookupJoin(metadata),
                         new PushTopNThroughCardinalityPreservingJoin(metadata),
@@ -1214,7 +1218,7 @@ public class PlanOptimizers
                 statsCalculator,
                 costCalculator,
                 Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
-                ImmutableSet.of(new AnnotateJoinNodeWithUniqueKeys())));
+                ImmutableSet.of(new AnnotateJoinNodeWithUniqueKeys(metadata), new AnnotateSemiJoinNodeWithUniqueKeys())));
         builder.add(new IterativeOptimizer(
                 metadata,
                 ruleStats,

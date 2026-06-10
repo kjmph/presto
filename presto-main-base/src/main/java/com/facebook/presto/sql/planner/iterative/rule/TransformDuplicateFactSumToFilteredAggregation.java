@@ -148,6 +148,27 @@ public class TransformDuplicateFactSumToFilteredAggregation
                     context);
         }
         if (!parts.isPresent()) {
+            Optional<PlanNode> dimensionFilteredAggregationRewrite = tryRewriteWithFilteredAggregationInsideDimension(
+                    context.getLookup().resolve(filterJoin.getLeft()),
+                    context.getLookup().resolve(filterJoin.getRight()),
+                    filterJoin.getCriteria().get(0).getLeft(),
+                    filterJoin.getCriteria().get(0).getRight(),
+                    aggregation,
+                    outerSum.get(),
+                    context);
+            if (!dimensionFilteredAggregationRewrite.isPresent()) {
+                dimensionFilteredAggregationRewrite = tryRewriteWithFilteredAggregationInsideDimension(
+                        context.getLookup().resolve(filterJoin.getRight()),
+                        context.getLookup().resolve(filterJoin.getLeft()),
+                        filterJoin.getCriteria().get(0).getRight(),
+                        filterJoin.getCriteria().get(0).getLeft(),
+                        aggregation,
+                        outerSum.get(),
+                        context);
+            }
+            if (dimensionFilteredAggregationRewrite.isPresent()) {
+                return Result.ofPlanNode(dimensionFilteredAggregationRewrite.get());
+            }
             return Result.empty();
         }
 
@@ -356,6 +377,286 @@ public class TransformDuplicateFactSumToFilteredAggregation
         return Optional.of(new FilteredAggregation(rootWithSum, rootKey, fact.get(), sum.get().getOutput()));
     }
 
+    private Optional<PlanNode> tryRewriteWithFilteredAggregationInsideDimension(
+            PlanNode factSide,
+            PlanNode dimensionSide,
+            VariableReferenceExpression factKey,
+            VariableReferenceExpression dimensionKey,
+            AggregationNode aggregation,
+            SumAggregation outerSum,
+            Context context)
+    {
+        if (!factSide.getOutputVariables().contains(factKey)
+                || !factSide.getOutputVariables().contains(outerSum.getInput())
+                || !dimensionSide.getOutputVariables().contains(dimensionKey)
+                || !dimensionSide.getOutputVariables().containsAll(aggregation.getGroupingKeys())) {
+            return Optional.empty();
+        }
+
+        Optional<FactSource> fact = extractFactSource(factSide, factKey, outerSum.getInput(), context);
+        if (!fact.isPresent()) {
+            return Optional.empty();
+        }
+
+        Optional<DimensionFilteredAggregation> filteredAggregation = extractFilteredAggregationFromDimension(
+                dimensionSide,
+                dimensionKey,
+                context);
+        if (!filteredAggregation.isPresent()) {
+            return Optional.empty();
+        }
+
+        if (!sameFactSources(fact.get(), filteredAggregation.get().getFact())) {
+            return Optional.empty();
+        }
+
+        if (!isKnownUnique(dimensionSide, ImmutableList.of(dimensionKey), context)) {
+            return Optional.empty();
+        }
+
+        Assignments.Builder assignments = Assignments.builder();
+        aggregation.getGroupingKeys().forEach(variable -> assignments.put(variable, variable));
+        assignments.put(outerSum.getOutput(), filteredAggregation.get().getSum());
+
+        return Optional.of(new ProjectNode(
+                aggregation.getSourceLocation(),
+                context.getIdAllocator().getNextId(),
+                filteredAggregation.get().getRootWithSum(),
+                assignments.build(),
+                LOCAL));
+    }
+
+    private Optional<DimensionFilteredAggregation> extractFilteredAggregationFromDimension(
+            PlanNode root,
+            VariableReferenceExpression rootKey,
+            Context context)
+    {
+        root = context.getLookup().resolve(root);
+        if (!root.getOutputVariables().contains(rootKey)) {
+            return Optional.empty();
+        }
+
+        Optional<FilteredAggregation> direct = extractFilteredAggregation(root, rootKey, context);
+        if (direct.isPresent()) {
+            return Optional.of(new DimensionFilteredAggregation(
+                    direct.get().getRootWithSum(),
+                    direct.get().getFact(),
+                    direct.get().getSum()));
+        }
+
+        if (root instanceof ProjectNode) {
+            ProjectNode project = (ProjectNode) root;
+            RowExpression assignment = project.getAssignments().get(rootKey);
+            if (!(assignment instanceof VariableReferenceExpression)) {
+                return Optional.empty();
+            }
+
+            Optional<DimensionFilteredAggregation> child = extractFilteredAggregationFromDimension(
+                    project.getSource(),
+                    (VariableReferenceExpression) assignment,
+                    context);
+            if (!child.isPresent()) {
+                return Optional.empty();
+            }
+
+            Assignments.Builder assignments = Assignments.builder();
+            assignments.putAll(project.getAssignments());
+            if (!project.getAssignments().getVariables().contains(child.get().getSum())) {
+                assignments.put(child.get().getSum(), child.get().getSum());
+            }
+
+            return Optional.of(new DimensionFilteredAggregation(
+                    new ProjectNode(
+                            project.getSourceLocation(),
+                            context.getIdAllocator().getNextId(),
+                            child.get().getRootWithSum(),
+                            assignments.build(),
+                            project.getLocality()),
+                    child.get().getFact(),
+                    child.get().getSum()));
+        }
+
+        if (root instanceof FilterNode) {
+            FilterNode filter = (FilterNode) root;
+            Optional<DimensionFilteredAggregation> child = extractFilteredAggregationFromDimension(
+                    filter.getSource(),
+                    rootKey,
+                    context);
+            if (!child.isPresent()) {
+                return Optional.empty();
+            }
+
+            return Optional.of(new DimensionFilteredAggregation(
+                    new FilterNode(
+                            filter.getSourceLocation(),
+                            context.getIdAllocator().getNextId(),
+                            child.get().getRootWithSum(),
+                            filter.getPredicate()),
+                    child.get().getFact(),
+                    child.get().getSum()));
+        }
+
+        if (!(root instanceof JoinNode)) {
+            return Optional.empty();
+        }
+
+        JoinNode join = (JoinNode) root;
+        if (join.getType() != JoinType.INNER || join.getFilter().isPresent() || join.getCriteria().isEmpty()) {
+            return Optional.empty();
+        }
+
+        PlanNode left = context.getLookup().resolve(join.getLeft());
+        PlanNode right = context.getLookup().resolve(join.getRight());
+
+        Optional<DimensionFilteredAggregation> fromLeft = tryExtractFilteredAggregationThroughJoinSide(
+                join,
+                left,
+                right,
+                rootKey,
+                true,
+                context);
+        if (fromLeft.isPresent()) {
+            return fromLeft;
+        }
+
+        return tryExtractFilteredAggregationThroughJoinSide(
+                join,
+                left,
+                right,
+                rootKey,
+                false,
+                context);
+    }
+
+    private Optional<DimensionFilteredAggregation> tryExtractFilteredAggregationThroughJoinSide(
+            JoinNode join,
+            PlanNode left,
+            PlanNode right,
+            VariableReferenceExpression rootKey,
+            boolean searchLeft,
+            Context context)
+    {
+        PlanNode searchSide = searchLeft ? left : right;
+        PlanNode otherSide = searchLeft ? right : left;
+
+        if (searchSide.getOutputVariables().contains(rootKey)) {
+            Optional<DimensionFilteredAggregation> child = extractFilteredAggregationFromDimension(
+                    searchSide,
+                    rootKey,
+                    context);
+            if (child.isPresent()) {
+                return Optional.of(rebuildJoinWithFilteredAggregation(
+                        join,
+                        searchLeft ? child.get().getRootWithSum() : left,
+                        searchLeft ? right : child.get().getRootWithSum(),
+                        rootKey,
+                        child.get(),
+                        searchLeft,
+                        context));
+            }
+        }
+
+        if (!otherSide.getOutputVariables().contains(rootKey)) {
+            return Optional.empty();
+        }
+
+        for (EquiJoinClause clause : join.getCriteria()) {
+            Optional<VariableReferenceExpression> searchKey = Optional.empty();
+            if (searchLeft && clause.getRight().equals(rootKey)) {
+                searchKey = Optional.of(clause.getLeft());
+            }
+            else if (!searchLeft && clause.getLeft().equals(rootKey)) {
+                searchKey = Optional.of(clause.getRight());
+            }
+
+            if (!searchKey.isPresent()) {
+                continue;
+            }
+
+            Optional<DimensionFilteredAggregation> child = extractFilteredAggregationFromDimension(
+                    searchSide,
+                    searchKey.get(),
+                    context);
+            if (!child.isPresent()) {
+                continue;
+            }
+
+            return Optional.of(rebuildJoinWithFilteredAggregation(
+                    join,
+                    searchLeft ? child.get().getRootWithSum() : left,
+                    searchLeft ? right : child.get().getRootWithSum(),
+                    rootKey,
+                    child.get(),
+                    searchLeft,
+                    context));
+        }
+
+        return Optional.empty();
+    }
+
+    private DimensionFilteredAggregation rebuildJoinWithFilteredAggregation(
+            JoinNode join,
+            PlanNode left,
+            PlanNode right,
+            VariableReferenceExpression rootKey,
+            DimensionFilteredAggregation child,
+            boolean sumFromLeft,
+            Context context)
+    {
+        JoinNode rewritten = new JoinNode(
+                join.getSourceLocation(),
+                context.getIdAllocator().getNextId(),
+                join.getStatsEquivalentPlanNode(),
+                join.getType(),
+                left,
+                right,
+                join.getCriteria(),
+                appendJoinOutput(join.getOutputVariables(), left, right, child.getSum(), sumFromLeft),
+                join.getFilter(),
+                join.getLeftHashVariable(),
+                join.getRightHashVariable(),
+                join.getDistributionType(),
+                join.getDynamicFilters(),
+                join.isLeftKeysUnique(),
+                join.isRightKeysUnique(),
+                join.isLeftKeysNonNull(),
+                join.isRightKeysNonNull(),
+                join.isLeftKeysCoveredByRightKeys(),
+                join.isRightKeysCoveredByLeftKeys());
+
+        return new DimensionFilteredAggregation(
+                rewritten,
+                child.getFact(),
+                child.getSum());
+    }
+
+    private List<VariableReferenceExpression> appendJoinOutput(
+            List<VariableReferenceExpression> originalOutputs,
+            PlanNode left,
+            PlanNode right,
+            VariableReferenceExpression extra,
+            boolean extraFromLeft)
+    {
+        if (originalOutputs.contains(extra)) {
+            return originalOutputs;
+        }
+
+        ImmutableList.Builder<VariableReferenceExpression> outputs = ImmutableList.builder();
+        originalOutputs.stream()
+                .filter(variable -> left.getOutputVariables().contains(variable))
+                .forEach(outputs::add);
+        if (extraFromLeft) {
+            outputs.add(extra);
+        }
+        originalOutputs.stream()
+                .filter(variable -> right.getOutputVariables().contains(variable))
+                .forEach(outputs::add);
+        if (!extraFromLeft) {
+            outputs.add(extra);
+        }
+        return outputs.build();
+    }
+
     private Optional<FactSource> extractFactSource(
             PlanNode root,
             VariableReferenceExpression key,
@@ -505,6 +806,14 @@ public class TransformDuplicateFactSumToFilteredAggregation
                             (constraint instanceof PrimaryKeyConstraint || constraint instanceof UniqueConstraint) &&
                             constraint.getColumns().size() == columns.size() &&
                             constraint.getColumns().containsAll(columns));
+        }
+
+        if (node instanceof AggregationNode) {
+            AggregationNode aggregation = (AggregationNode) node;
+            return aggregation.getGroupingSetCount() == 1
+                    && aggregation.getGroupIdVariable().isEmpty()
+                    && !aggregation.getStep().isOutputPartial()
+                    && variables.containsAll(aggregation.getGroupingKeys());
         }
 
         if (node instanceof JoinNode) {
@@ -669,6 +978,38 @@ public class TransformDuplicateFactSumToFilteredAggregation
         public VariableReferenceExpression getRootKey()
         {
             return rootKey;
+        }
+
+        public FactSource getFact()
+        {
+            return fact;
+        }
+
+        public VariableReferenceExpression getSum()
+        {
+            return sum;
+        }
+    }
+
+    private static class DimensionFilteredAggregation
+    {
+        private final PlanNode rootWithSum;
+        private final FactSource fact;
+        private final VariableReferenceExpression sum;
+
+        private DimensionFilteredAggregation(
+                PlanNode rootWithSum,
+                FactSource fact,
+                VariableReferenceExpression sum)
+        {
+            this.rootWithSum = rootWithSum;
+            this.fact = fact;
+            this.sum = sum;
+        }
+
+        public PlanNode getRootWithSum()
+        {
+            return rootWithSum;
         }
 
         public FactSource getFact()

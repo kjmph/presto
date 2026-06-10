@@ -121,7 +121,7 @@ public class OptimizerAssert
     public void matches(PlanMatchPattern pattern)
     {
         inTransaction(session -> {
-            assertPlan(session, metadata, statsCalculator, applyRules(), pattern);
+            assertPlan(session, metadata, statsCalculator, applyRules(session), pattern);
             return null;
         });
     }
@@ -129,17 +129,20 @@ public class OptimizerAssert
     public void doesNotMatch(PlanMatchPattern pattern)
     {
         inTransaction(session -> {
-            assertPlanDoesNotMatch(session, metadata, statsCalculator, applyRules(), pattern);
+            assertPlanDoesNotMatch(session, metadata, statsCalculator, applyRules(session), pattern);
             return null;
         });
     }
 
     public void validates(Consumer<Plan> planValidator)
     {
-        planValidator.accept(applyRules());
+        inTransaction(session -> {
+            planValidator.accept(applyRules(session));
+            return null;
+        });
     }
 
-    private Plan applyRules()
+    private Plan applyRules(Session session)
     {
         PlanNode actual = optimizer.optimize(plan, session, types, new VariableAllocator(), idAllocator, WarningCollector.NOOP).getPlanNode();
 

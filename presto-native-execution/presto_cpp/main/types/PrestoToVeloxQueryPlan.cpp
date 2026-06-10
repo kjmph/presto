@@ -748,7 +748,12 @@ core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
         left,
         right,
         left->outputType(),
-        useCachedHashTable(*semiJoin));
+        useCachedHashTable(*semiJoin),
+        /*nullAsValue=*/false,
+        semiJoin->sourceKeyUnique,
+        semiJoin->filteringSourceKeyUnique,
+        semiJoin->sourceKeyNonNull,
+        semiJoin->filteringSourceKeyNonNull);
 
     return std::make_shared<core::ProjectNode>(
         node->id, std::move(names), std::move(projections), hashJoinNode);
@@ -1316,7 +1321,9 @@ core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
       node->leftKeysUnique,
       node->rightKeysUnique,
       node->leftKeysNonNull,
-      node->rightKeysNonNull);
+      node->rightKeysNonNull,
+      node->leftKeysCoveredByRightKeys,
+      node->rightKeysCoveredByLeftKeys);
 }
 
 core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
@@ -1348,7 +1355,12 @@ core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
       left,
       right,
       ROW(std::move(outputNames), std::move(outputTypes)),
-      useCachedHashTable(*node));
+      useCachedHashTable(*node),
+      /*nullAsValue=*/false,
+      node->sourceKeyUnique,
+      node->filteringSourceKeyUnique,
+      node->sourceKeyNonNull,
+      node->filteringSourceKeyNonNull);
 }
 
 core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(

@@ -1687,6 +1687,8 @@ struct JoinNode : public PlanNode {
   bool rightKeysUnique = {};
   bool leftKeysNonNull = {};
   bool rightKeysNonNull = {};
+  bool leftKeysCoveredByRightKeys = {};
+  bool rightKeysCoveredByLeftKeys = {};
 
   JoinNode() noexcept;
 };
@@ -2297,6 +2299,10 @@ struct SemiJoinNode : public PlanNode {
   std::shared_ptr<VariableReferenceExpression> filteringSourceHashVariable = {};
   std::shared_ptr<DistributionType> distributionType = {};
   Map<String, VariableReferenceExpression> dynamicFilters = {};
+  bool sourceKeyUnique = {};
+  bool filteringSourceKeyUnique = {};
+  bool sourceKeyNonNull = {};
+  bool filteringSourceKeyNonNull = {};
 
   SemiJoinNode() noexcept;
 };

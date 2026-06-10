@@ -481,6 +481,28 @@ public final class PlanMatchPattern
                 .with(new JoinUniqueKeyMatcher(expectedLeftKeysUnique, expectedRightKeysUnique, expectedLeftKeysNonNull, expectedRightKeysNonNull));
     }
 
+    public static PlanMatchPattern joinWithKeyProperties(
+            JoinType joinType,
+            List<ExpectedValueProvider<EquiJoinClause>> expectedEquiCriteria,
+            boolean expectedLeftKeysUnique,
+            boolean expectedRightKeysUnique,
+            boolean expectedLeftKeysNonNull,
+            boolean expectedRightKeysNonNull,
+            boolean expectedLeftKeysCoveredByRightKeys,
+            boolean expectedRightKeysCoveredByLeftKeys,
+            PlanMatchPattern left,
+            PlanMatchPattern right)
+    {
+        return join(joinType, expectedEquiCriteria, left, right)
+                .with(new JoinUniqueKeyMatcher(
+                        expectedLeftKeysUnique,
+                        expectedRightKeysUnique,
+                        expectedLeftKeysNonNull,
+                        expectedRightKeysNonNull,
+                        expectedLeftKeysCoveredByRightKeys,
+                        expectedRightKeysCoveredByLeftKeys));
+    }
+
     public static PlanMatchPattern join(
             JoinType joinType,
             List<ExpectedValueProvider<EquiJoinClause>> expectedEquiCriteria,
