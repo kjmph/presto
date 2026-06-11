@@ -601,6 +601,18 @@ public final class ValidateDependenciesChecker
 
             checkArgument(node.getSource().getOutputVariables().contains(node.getSourceJoinVariable()), "Symbol from semi join clause (%s) not in source (%s)", node.getSourceJoinVariable(), node.getSource().getOutputVariables());
             checkArgument(node.getFilteringSource().getOutputVariables().contains(node.getFilteringSourceJoinVariable()), "Symbol from semi join clause (%s) not in filtering source (%s)", node.getSourceJoinVariable(), node.getFilteringSource().getOutputVariables());
+            node.getFilter().ifPresent(predicate -> {
+                Set<String> predicateVariables = VariablesExtractor.extractUnique(predicate).stream().map(VariableReferenceExpression::getName).collect(toImmutableSet());
+                Set<VariableReferenceExpression> allInputs = ImmutableSet.<VariableReferenceExpression>builder()
+                        .addAll(node.getSource().getOutputVariables())
+                        .addAll(node.getFilteringSource().getOutputVariables())
+                        .build();
+                checkArgument(
+                        allInputs.stream().map(VariableReferenceExpression::getName).collect(toImmutableSet()).containsAll(predicateVariables),
+                        "Symbol from semi join filter (%s) not in sources (%s)",
+                        predicateVariables,
+                        allInputs);
+            });
 
             Set<VariableReferenceExpression> outputs = createInputs(node, boundVariables);
             checkArgument(outputs.containsAll(node.getSource().getOutputVariables()), "Semi join output symbols (%s) must contain all of the source symbols (%s)", node.getOutputVariables(), node.getSource().getOutputVariables());

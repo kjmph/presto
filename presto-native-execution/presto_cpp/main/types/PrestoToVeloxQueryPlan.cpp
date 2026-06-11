@@ -744,7 +744,8 @@ core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
         joinType == core::JoinType::kAnti ? true : false,
         leftKeys,
         rightKeys,
-        nullptr,
+        semiJoin->filter ? exprConverter_.toVeloxExpr(*semiJoin->filter)
+                         : nullptr,
         left,
         right,
         left->outputType(),
@@ -1351,7 +1352,7 @@ core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
       /*nullAware=*/true,
       leftKeys,
       rightKeys,
-      /*filter=*/nullptr,
+      node->filter ? exprConverter_.toVeloxExpr(*node->filter) : nullptr,
       left,
       right,
       ROW(std::move(outputNames), std::move(outputTypes)),

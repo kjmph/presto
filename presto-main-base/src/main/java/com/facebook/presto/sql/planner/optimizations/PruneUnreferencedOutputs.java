@@ -273,13 +273,25 @@ public class PruneUnreferencedOutputs
             if (node.getSourceHashVariable().isPresent()) {
                 sourceInputsBuilder.add(node.getSourceHashVariable().get());
             }
-            Set<VariableReferenceExpression> sourceInputs = sourceInputsBuilder.build();
 
             ImmutableSet.Builder<VariableReferenceExpression> filteringSourceInputBuilder = ImmutableSet.builder();
             filteringSourceInputBuilder.add(node.getFilteringSourceJoinVariable());
             if (node.getFilteringSourceHashVariable().isPresent()) {
                 filteringSourceInputBuilder.add(node.getFilteringSourceHashVariable().get());
             }
+            if (node.getFilter().isPresent()) {
+                Set<VariableReferenceExpression> sourceVariables = ImmutableSet.copyOf(node.getSource().getOutputVariables());
+                Set<VariableReferenceExpression> filteringSourceVariables = ImmutableSet.copyOf(node.getFilteringSource().getOutputVariables());
+                for (VariableReferenceExpression variable : VariablesExtractor.extractUnique(node.getFilter().get())) {
+                    if (sourceVariables.contains(variable)) {
+                        sourceInputsBuilder.add(variable);
+                    }
+                    if (filteringSourceVariables.contains(variable)) {
+                        filteringSourceInputBuilder.add(variable);
+                    }
+                }
+            }
+            Set<VariableReferenceExpression> sourceInputs = sourceInputsBuilder.build();
             Set<VariableReferenceExpression> filteringSourceInputs = filteringSourceInputBuilder.build();
 
             PlanNode source = context.rewrite(node.getSource(), sourceInputs);
@@ -297,7 +309,12 @@ public class PruneUnreferencedOutputs
                     node.getSourceHashVariable(),
                     node.getFilteringSourceHashVariable(),
                     node.getDistributionType(),
-                    node.getDynamicFilters());
+                    node.getDynamicFilters(),
+                    node.isSourceKeyUnique(),
+                    node.isFilteringSourceKeyUnique(),
+                    node.isSourceKeyNonNull(),
+                    node.isFilteringSourceKeyNonNull(),
+                    node.getFilter());
         }
 
         @Override

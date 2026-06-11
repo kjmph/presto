@@ -454,7 +454,12 @@ public class HashGenerationOptimizer
                             Optional.of(sourceHashVariable),
                             Optional.of(filteringSourceHashVariable),
                             node.getDistributionType(),
-                            node.getDynamicFilters()),
+                            node.getDynamicFilters(),
+                            node.isSourceKeyUnique(),
+                            node.isFilteringSourceKeyUnique(),
+                            node.isSourceKeyNonNull(),
+                            node.isFilteringSourceKeyNonNull(),
+                            node.getFilter()),
                     source.getHashVariables());
         }
 

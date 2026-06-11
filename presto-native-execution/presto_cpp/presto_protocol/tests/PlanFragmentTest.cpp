@@ -110,6 +110,7 @@ std::string semiJoinNodeJson() {
     "filteringSourceHashVariable": null,
     "distributionType": null,
     "dynamicFilters": {},
+    "filter": null,
     "sourceKeyUnique": true,
     "filteringSourceKeyUnique": false,
     "sourceKeyNonNull": true,

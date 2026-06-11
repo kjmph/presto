@@ -14,6 +14,7 @@
 package com.facebook.presto.spi.plan;
 
 import com.facebook.presto.spi.SourceLocation;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -41,6 +42,7 @@ public final class SemiJoinNode
     private final Optional<VariableReferenceExpression> filteringSourceHashVariable;
     private final Optional<DistributionType> distributionType;
     private final Map<String, VariableReferenceExpression> dynamicFilters;
+    private final Optional<RowExpression> filter;
     private final boolean sourceKeyUnique;
     private final boolean filteringSourceKeyUnique;
     private final boolean sourceKeyNonNull;
@@ -62,9 +64,10 @@ public final class SemiJoinNode
             @JsonProperty("sourceKeyUnique") boolean sourceKeyUnique,
             @JsonProperty("filteringSourceKeyUnique") boolean filteringSourceKeyUnique,
             @JsonProperty("sourceKeyNonNull") boolean sourceKeyNonNull,
-            @JsonProperty("filteringSourceKeyNonNull") boolean filteringSourceKeyNonNull)
+            @JsonProperty("filteringSourceKeyNonNull") boolean filteringSourceKeyNonNull,
+            @JsonProperty("filter") Optional<RowExpression> filter)
     {
-        this(sourceLocation, id, Optional.empty(), source, filteringSource, sourceJoinVariable, filteringSourceJoinVariable, semiJoinOutput, sourceHashVariable, filteringSourceHashVariable, distributionType, dynamicFilters, sourceKeyUnique, filteringSourceKeyUnique, sourceKeyNonNull, filteringSourceKeyNonNull);
+        this(sourceLocation, id, Optional.empty(), source, filteringSource, sourceJoinVariable, filteringSourceJoinVariable, semiJoinOutput, sourceHashVariable, filteringSourceHashVariable, distributionType, dynamicFilters, sourceKeyUnique, filteringSourceKeyUnique, sourceKeyNonNull, filteringSourceKeyNonNull, filter == null ? Optional.empty() : filter);
     }
 
     public SemiJoinNode(
@@ -118,6 +121,28 @@ public final class SemiJoinNode
             boolean sourceKeyNonNull,
             boolean filteringSourceKeyNonNull)
     {
+        this(sourceLocation, id, statsEquivalentPlanNode, source, filteringSource, sourceJoinVariable, filteringSourceJoinVariable, semiJoinOutput, sourceHashVariable, filteringSourceHashVariable, distributionType, dynamicFilters, sourceKeyUnique, filteringSourceKeyUnique, sourceKeyNonNull, filteringSourceKeyNonNull, Optional.empty());
+    }
+
+    public SemiJoinNode(
+            Optional<SourceLocation> sourceLocation,
+            PlanNodeId id,
+            Optional<PlanNode> statsEquivalentPlanNode,
+            PlanNode source,
+            PlanNode filteringSource,
+            VariableReferenceExpression sourceJoinVariable,
+            VariableReferenceExpression filteringSourceJoinVariable,
+            VariableReferenceExpression semiJoinOutput,
+            Optional<VariableReferenceExpression> sourceHashVariable,
+            Optional<VariableReferenceExpression> filteringSourceHashVariable,
+            Optional<DistributionType> distributionType,
+            Map<String, VariableReferenceExpression> dynamicFilters,
+            boolean sourceKeyUnique,
+            boolean filteringSourceKeyUnique,
+            boolean sourceKeyNonNull,
+            boolean filteringSourceKeyNonNull,
+            Optional<RowExpression> filter)
+    {
         super(sourceLocation, id, statsEquivalentPlanNode);
         this.source = requireNonNull(source, "source is null");
         this.filteringSource = requireNonNull(filteringSource, "filteringSource is null");
@@ -128,6 +153,7 @@ public final class SemiJoinNode
         this.filteringSourceHashVariable = requireNonNull(filteringSourceHashVariable, "filteringSourceHashVariable is null");
         this.distributionType = requireNonNull(distributionType, "distributionType is null");
         this.dynamicFilters = requireNonNull(dynamicFilters, "dynamicFilters is null");
+        this.filter = requireNonNull(filter, "filter is null");
         this.sourceKeyUnique = sourceKeyUnique;
         this.filteringSourceKeyUnique = filteringSourceKeyUnique;
         this.sourceKeyNonNull = sourceKeyNonNull;
@@ -210,6 +236,12 @@ public final class SemiJoinNode
         return dynamicFilters;
     }
 
+    @JsonProperty
+    public Optional<RowExpression> getFilter()
+    {
+        return filter;
+    }
+
     @JsonProperty("sourceKeyUnique")
     public boolean isSourceKeyUnique()
     {
@@ -278,7 +310,8 @@ public final class SemiJoinNode
                 sourceKeyUnique,
                 filteringSourceKeyUnique,
                 sourceKeyNonNull,
-                filteringSourceKeyNonNull);
+                filteringSourceKeyNonNull,
+                filter);
     }
 
     @Override
@@ -300,7 +333,8 @@ public final class SemiJoinNode
                 sourceKeyUnique,
                 filteringSourceKeyUnique,
                 sourceKeyNonNull,
-                filteringSourceKeyNonNull);
+                filteringSourceKeyNonNull,
+                filter);
     }
 
     @Override
@@ -327,7 +361,8 @@ public final class SemiJoinNode
                 sourceKeyUnique,
                 filteringSourceKeyUnique,
                 sourceKeyNonNull,
-                filteringSourceKeyNonNull);
+                filteringSourceKeyNonNull,
+                filter);
     }
 
     public SemiJoinNode withKeyProperties(boolean sourceKeyUnique, boolean filteringSourceKeyUnique, boolean sourceKeyNonNull, boolean filteringSourceKeyNonNull)
@@ -348,6 +383,7 @@ public final class SemiJoinNode
                 sourceKeyUnique,
                 filteringSourceKeyUnique,
                 sourceKeyNonNull,
-                filteringSourceKeyNonNull);
+                filteringSourceKeyNonNull,
+                filter);
     }
 }

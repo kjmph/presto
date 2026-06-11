@@ -17,8 +17,10 @@ import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.spi.plan.SemiJoinNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
+import com.facebook.presto.sql.planner.VariablesExtractor;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
 
 import java.util.Set;
@@ -48,7 +50,15 @@ public class PruneSemiJoinFilteringSourceColumns
     {
         Set<VariableReferenceExpression> requiredFilteringSourceInputs = Streams.concat(
                         Stream.of(semiJoinNode.getFilteringSourceJoinVariable()),
-                        semiJoinNode.getFilteringSourceHashVariable().map(Stream::of).orElseGet(Stream::empty))
+                        semiJoinNode.getFilteringSourceHashVariable().map(Stream::of).orElseGet(Stream::empty),
+                        semiJoinNode.getFilter()
+                                .map(VariablesExtractor::extractUnique)
+                                .map(variables -> {
+                                    Set<VariableReferenceExpression> filteringSourceVariables = ImmutableSet.copyOf(semiJoinNode.getFilteringSource().getOutputVariables());
+                                    return variables.stream()
+                                            .filter(filteringSourceVariables::contains);
+                                })
+                                .orElseGet(Stream::empty))
                 .collect(toImmutableSet());
 
         return restrictOutputs(context.getIdAllocator(), semiJoinNode.getFilteringSource(), requiredFilteringSourceInputs)
