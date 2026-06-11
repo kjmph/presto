@@ -18,6 +18,8 @@ import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.metadata.FunctionAndTypeManager;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.constraints.PrimaryKeyConstraint;
 import com.facebook.presto.spi.constraints.UniqueConstraint;
@@ -717,8 +719,16 @@ public class TransformDuplicateFactSumToFilteredAggregation
         }
 
         VariableReferenceExpression input = (VariableReferenceExpression) sum.getArguments().get(0);
-        if (!functionAndTypeManager.lookupFunction("sum", fromTypes(input.getType())).equals(sum.getFunctionHandle())) {
-            return Optional.empty();
+        try {
+            if (!functionAndTypeManager.lookupFunction("sum", fromTypes(input.getType())).equals(sum.getFunctionHandle())) {
+                return Optional.empty();
+            }
+        }
+        catch (PrestoException e) {
+            if (e.getErrorCode().equals(StandardErrorCode.FUNCTION_NOT_FOUND.toErrorCode())) {
+                return Optional.empty();
+            }
+            throw e;
         }
 
         return Optional.of(new SumAggregation(entry.getKey(), input));

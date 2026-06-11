@@ -172,6 +172,7 @@ std::string semiJoinPlanFragmentJson() {
       "filteringSourceHashVariable": null,
       "distributionType": null,
       "dynamicFilters": {},
+      "filter": null,
       "sourceKeyUnique": false,
       "filteringSourceKeyUnique": true,
       "sourceKeyNonNull": true,

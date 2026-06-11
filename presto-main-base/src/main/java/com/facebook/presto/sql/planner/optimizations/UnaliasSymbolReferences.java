@@ -721,10 +721,12 @@ public class UnaliasSymbolReferences
         {
             PlanNode source = context.rewrite(node.getSource());
             PlanNode filteringSource = context.rewrite(node.getFilteringSource());
+            Optional<RowExpression> canonicalFilter = node.getFilter().map(this::canonicalize);
 
             return new SemiJoinNode(
                     node.getSourceLocation(),
                     node.getId(),
+                    node.getStatsEquivalentPlanNode(),
                     source,
                     filteringSource,
                     canonicalize(node.getSourceJoinVariable()),
@@ -733,7 +735,12 @@ public class UnaliasSymbolReferences
                     canonicalize(node.getSourceHashVariable()),
                     canonicalize(node.getFilteringSourceHashVariable()),
                     node.getDistributionType(),
-                    node.getDynamicFilters());
+                    canonicalizeAndDistinct(node.getDynamicFilters()),
+                    node.isSourceKeyUnique(),
+                    node.isFilteringSourceKeyUnique(),
+                    node.isSourceKeyNonNull(),
+                    node.isFilteringSourceKeyNonNull(),
+                    canonicalFilter);
         }
 
         @Override

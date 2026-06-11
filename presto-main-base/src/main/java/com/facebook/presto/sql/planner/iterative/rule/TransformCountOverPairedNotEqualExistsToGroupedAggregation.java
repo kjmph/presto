@@ -52,7 +52,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import static com.facebook.presto.SystemSessionProperties.shouldPushAggregationThroughJoin;
 import static com.facebook.presto.common.function.OperatorType.EQUAL;
 import static com.facebook.presto.common.function.OperatorType.GREATER_THAN;
 import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
@@ -115,7 +114,11 @@ public class TransformCountOverPairedNotEqualExistsToGroupedAggregation
     @Override
     public boolean isEnabled(Session session)
     {
-        return shouldPushAggregationThroughJoin(session);
+        // Experimental guard: this rewrite produces a very large final
+        // aggregation for canonical TPC-H Q21 at SF10K, which currently OOMs
+        // in the native GPU final groupby. Keep Q21 on the standard per-EXISTS
+        // min/max aggregation shape for now.
+        return false;
     }
 
     @Override

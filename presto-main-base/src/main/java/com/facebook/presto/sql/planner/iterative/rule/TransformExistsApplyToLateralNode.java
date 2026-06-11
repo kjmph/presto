@@ -27,6 +27,7 @@ import com.facebook.presto.spi.plan.JoinType;
 import com.facebook.presto.spi.plan.LimitNode;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.ProjectNode;
+import com.facebook.presto.spi.plan.SemiJoinNode;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.ConstantExpression;
 import com.facebook.presto.spi.relation.ExistsExpression;
@@ -45,6 +46,7 @@ import com.google.common.collect.ImmutableMap;
 import java.util.List;
 import java.util.Optional;
 
+import static com.facebook.presto.SystemSessionProperties.isNativeExecutionEnabled;
 import static com.facebook.presto.common.function.OperatorType.GREATER_THAN;
 import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
 import static com.facebook.presto.common.type.BigintType.BIGINT;
@@ -128,6 +130,11 @@ public class TransformExistsApplyToLateralNode
             return Result.ofPlanNode(nonDefaultAggregation.get());
         }
 
+        Optional<PlanNode> filteredSemiJoin = rewriteToFilteredSemiJoin(parent, context);
+        if (filteredSemiJoin.isPresent()) {
+            return Result.ofPlanNode(filteredSemiJoin.get());
+        }
+
         Optional<PlanNode> groupedNotEqualAggregation = rewriteToGroupedNotEqualAggregation(parent, context);
         if (groupedNotEqualAggregation.isPresent()) {
             return Result.ofPlanNode(groupedNotEqualAggregation.get());
@@ -172,6 +179,65 @@ public class TransformExistsApplyToLateralNode
                         LEFT,
                         applyNode.getOriginSubqueryError()),
                 assignments.build()));
+    }
+
+    private Optional<PlanNode> rewriteToFilteredSemiJoin(ApplyNode applyNode, Context context)
+    {
+        if (!isNativeExecutionEnabled(context.getSession())) {
+            return Optional.empty();
+        }
+
+        checkState(applyNode.getSubquery().getOutputVariables().isEmpty(), "Expected subquery output variables to be pruned");
+
+        PlanNodeDecorrelator decorrelator = new PlanNodeDecorrelator(context.getIdAllocator(), context.getVariableAllocator(), context.getLookup(), logicalRowExpressions);
+        Optional<DecorrelatedNode> decorrelated = decorrelator.decorrelateFilters(stripEmptyProject(applyNode.getSubquery(), context), applyNode.getCorrelation());
+        if (!decorrelated.isPresent() || !decorrelated.get().getCorrelatedPredicates().isPresent()) {
+            return Optional.empty();
+        }
+        PlanNode decorrelatedNode = decorrelated.get().getNode();
+        if (containsUnsupportedGroupedNotEqualSource(decorrelatedNode, context)) {
+            return Optional.empty();
+        }
+
+        Optional<GroupedNotEqualExists> shape = extractGroupedNotEqualExists(
+                decorrelated.get().getCorrelatedPredicates().get(),
+                applyNode.getCorrelation(),
+                decorrelatedNode.getOutputVariables());
+        if (!shape.isPresent() || shape.get().getClauses().size() != 1) {
+            return Optional.empty();
+        }
+
+        EquiJoinClause clause = getOnlyElement(shape.get().getClauses());
+        VariableReferenceExpression marker = context.getVariableAllocator().newVariable(
+                getOnlyElement(applyNode.getSubqueryAssignments().getVariables()).getSourceLocation(),
+                "exists_marker",
+                BOOLEAN);
+        RowExpression filter = comparisonExpression(functionResolution, NOT_EQUAL, shape.get().getSubqueryValue(), shape.get().getCorrelationValue());
+
+        SemiJoinNode semiJoin = new SemiJoinNode(
+                applyNode.getSourceLocation(),
+                context.getIdAllocator().getNextId(),
+                applyNode.getInput(),
+                decorrelatedNode,
+                clause.getLeft(),
+                clause.getRight(),
+                marker,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                ImmutableMap.of(),
+                false,
+                false,
+                false,
+                false,
+                Optional.of(filter));
+
+        VariableReferenceExpression exists = getOnlyElement(applyNode.getSubqueryAssignments().getVariables());
+        Assignments.Builder assignments = Assignments.builder();
+        assignments.putAll(identityAssignments(applyNode.getInput().getOutputVariables()));
+        assignments.put(exists, specialForm(COALESCE, BOOLEAN, ImmutableList.of(marker, FALSE_CONSTANT)));
+
+        return Optional.of(new ProjectNode(context.getIdAllocator().getNextId(), semiJoin, assignments.build()));
     }
 
     /**

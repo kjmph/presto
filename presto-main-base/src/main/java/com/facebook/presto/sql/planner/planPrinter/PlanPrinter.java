@@ -621,6 +621,7 @@ public class PlanPrinter
                     node.isSourceKeyNonNull(),
                     node.isFilteringSourceKeyUnique(),
                     node.isFilteringSourceKeyNonNull());
+            node.getFilter().ifPresent(filter -> nodeOutput.appendDetailsLine("Filter: %s", formatter.apply(filter)));
             if (!node.getDynamicFilters().isEmpty()) {
                 nodeOutput.appendDetails(getDynamicFilterAssignments(node));
             }

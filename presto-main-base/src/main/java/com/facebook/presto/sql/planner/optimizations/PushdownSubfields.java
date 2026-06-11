@@ -348,6 +348,7 @@ public class PushdownSubfields
         {
             context.get().variables.add(node.getSourceJoinVariable());
             context.get().variables.add(node.getFilteringSourceJoinVariable());
+            node.getFilter().ifPresent(filter -> filter.accept(subfieldExtractor, context.get()));
             return context.defaultRewrite(node, context.get());
         }
 

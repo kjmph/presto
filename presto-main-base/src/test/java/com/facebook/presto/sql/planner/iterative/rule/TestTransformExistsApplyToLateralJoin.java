@@ -16,6 +16,8 @@ package com.facebook.presto.sql.planner.iterative.rule;
 import com.facebook.presto.common.function.OperatorType;
 import com.facebook.presto.spi.plan.Assignments;
 import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.ProjectNode;
+import com.facebook.presto.spi.plan.SemiJoinNode;
 import com.facebook.presto.spi.relation.ExistsExpression;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
@@ -26,7 +28,9 @@ import org.testng.annotations.Test;
 
 import java.util.Optional;
 
+import static com.facebook.presto.SystemSessionProperties.NATIVE_EXECUTION_ENABLED;
 import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.expressions.LogicalRowExpressions.and;
 import static com.facebook.presto.expressions.LogicalRowExpressions.TRUE_CONSTANT;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.aggregation;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.functionCall;
@@ -101,8 +105,41 @@ public class TestTransformExistsApplyToLateralJoin
                                         project(
                                                 ImmutableMap.of("subquerytrue", PlanMatchPattern.expression("true")),
                                                 limit(1,
-                                                        project(ImmutableMap.of(),
-                                                                node(FilterNode.class,
-                                                                        values("column"))))))));
+                                project(ImmutableMap.of(),
+                                        node(FilterNode.class,
+                                                values("column"))))))));
+    }
+
+    @Test
+    public void testNativeGroupedNotEqualExistsRewritesToFilteredSemiJoin()
+    {
+        FunctionResolution functionResolution = new FunctionResolution(getFunctionManager().getFunctionAndTypeResolver());
+        tester().assertThat(new TransformExistsApplyToLateralNode(tester().getMetadata().getFunctionAndTypeManager()))
+                .setSystemProperty(NATIVE_EXECUTION_ENABLED, "true")
+                .on(p ->
+                        p.apply(
+                                assignment(p.variable("b", BOOLEAN), new ExistsExpression(Optional.empty(), TRUE_CONSTANT)),
+                                ImmutableList.of(p.variable("corr"), p.variable("outer_supp")),
+                                p.values(p.variable("corr"), p.variable("outer_supp")),
+                                p.project(Assignments.of(),
+                                        p.filter(
+                                                and(
+                                                        comparisonExpression(
+                                                                functionResolution,
+                                                                OperatorType.EQUAL,
+                                                                p.variable("corr"),
+                                                                p.variable("column")),
+                                                        comparisonExpression(
+                                                                functionResolution,
+                                                                OperatorType.NOT_EQUAL,
+                                                                p.variable("outer_supp"),
+                                                                p.variable("inner_supp"))),
+                                                p.values(p.variable("column"), p.variable("inner_supp"))))))
+                .matches(
+                        node(ProjectNode.class,
+                                node(SemiJoinNode.class,
+                                        values("corr", "outer_supp"),
+                                        node(FilterNode.class,
+                                                values("column", "inner_supp")))));
     }
 }

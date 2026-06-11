@@ -2299,6 +2299,7 @@ struct SemiJoinNode : public PlanNode {
   std::shared_ptr<VariableReferenceExpression> filteringSourceHashVariable = {};
   std::shared_ptr<DistributionType> distributionType = {};
   Map<String, VariableReferenceExpression> dynamicFilters = {};
+  std::shared_ptr<std::shared_ptr<RowExpression>> filter = {};
   bool sourceKeyUnique = {};
   bool filteringSourceKeyUnique = {};
   bool sourceKeyNonNull = {};

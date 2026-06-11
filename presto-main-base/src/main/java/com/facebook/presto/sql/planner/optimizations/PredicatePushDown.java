@@ -1547,7 +1547,7 @@ public class PredicatePushDown
             PlanNode output = node;
             if (rewrittenSource != node.getSource() || rewrittenFilteringSource != node.getFilteringSource()) {
                 planChanged = true;
-                output = new SemiJoinNode(node.getSourceLocation(), node.getId(), rewrittenSource, rewrittenFilteringSource, node.getSourceJoinVariable(), node.getFilteringSourceJoinVariable(), node.getSemiJoinOutput(), node.getSourceHashVariable(), node.getFilteringSourceHashVariable(), node.getDistributionType(), node.getDynamicFilters());
+                output = new SemiJoinNode(node.getSourceLocation(), node.getId(), node.getStatsEquivalentPlanNode(), rewrittenSource, rewrittenFilteringSource, node.getSourceJoinVariable(), node.getFilteringSourceJoinVariable(), node.getSemiJoinOutput(), node.getSourceHashVariable(), node.getFilteringSourceHashVariable(), node.getDistributionType(), node.getDynamicFilters(), node.isSourceKeyUnique(), node.isFilteringSourceKeyUnique(), node.isSourceKeyNonNull(), node.isFilteringSourceKeyNonNull(), node.getFilter());
             }
             if (!postJoinConjuncts.isEmpty()) {
                 planChanged = true;
@@ -1660,7 +1660,12 @@ public class PredicatePushDown
                         node.getSourceHashVariable(),
                         node.getFilteringSourceHashVariable(),
                         node.getDistributionType(),
-                        dynamicFilters);
+                        dynamicFilters,
+                        node.isSourceKeyUnique(),
+                        node.isFilteringSourceKeyUnique(),
+                        node.isSourceKeyNonNull(),
+                        node.isFilteringSourceKeyNonNull(),
+                        node.getFilter());
             }
             if (!postJoinConjuncts.isEmpty()) {
                 planChanged = true;

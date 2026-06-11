@@ -10299,6 +10299,7 @@ void to_json(json& j, const SemiJoinNode& p) {
       "SemiJoinNode",
       "Map<String, VariableReferenceExpression>",
       "dynamicFilters");
+  to_json_key(j, "filter", p.filter, "SemiJoinNode", "RowExpression", "filter");
   to_json_key(
       j,
       "sourceKeyUnique",
@@ -10389,6 +10390,10 @@ void from_json(const json& j, SemiJoinNode& p) {
       "SemiJoinNode",
       "Map<String, VariableReferenceExpression>",
       "dynamicFilters");
+  if (j.count("filter")) {
+    from_json_key(
+        j, "filter", p.filter, "SemiJoinNode", "RowExpression", "filter");
+  }
   if (j.count("sourceKeyUnique")) {
     from_json_key(
         j,
