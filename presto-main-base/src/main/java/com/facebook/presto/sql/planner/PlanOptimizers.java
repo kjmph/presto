@@ -105,6 +105,7 @@ import com.facebook.presto.sql.planner.iterative.rule.PushAggregationThroughOute
 import com.facebook.presto.sql.planner.iterative.rule.PushDownDereferences;
 import com.facebook.presto.sql.planner.iterative.rule.PushDownFilterExpressionEvaluationThroughCrossJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushFilterThroughSelectingAggregation;
+import com.facebook.presto.sql.planner.iterative.rule.PushGlobalSumThroughInnerJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushJoinKeyFilterBelowAggregation;
 import com.facebook.presto.sql.planner.iterative.rule.PushLimitThroughMarkDistinct;
 import com.facebook.presto.sql.planner.iterative.rule.PushLimitThroughOffset;
@@ -790,6 +791,7 @@ public class PlanOptimizers
                                 new TransformMaxAggregationSelfJoinToTopNRank(metadata.getFunctionAndTypeManager()),
                                 new TransformMinAggregationJoinToWindow(metadata.getFunctionAndTypeManager()),
                                 new TransformDuplicateFactSumToFilteredAggregation(metadata.getFunctionAndTypeManager()),
+                                new PushGlobalSumThroughInnerJoin(metadata.getFunctionAndTypeManager()),
                                 new PushAggregationThroughCardinalityPreservingLookupJoin(metadata),
                                 new PushTopNThroughCardinalityPreservingJoin(metadata),
                                 new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager(), taskCountEstimator),
@@ -1021,6 +1023,7 @@ public class PlanOptimizers
                         new TransformMaxAggregationSelfJoinToTopNRank(metadata.getFunctionAndTypeManager()),
                         new TransformMinAggregationJoinToWindow(metadata.getFunctionAndTypeManager()),
                         new TransformDuplicateFactSumToFilteredAggregation(metadata.getFunctionAndTypeManager()),
+                        new PushGlobalSumThroughInnerJoin(metadata.getFunctionAndTypeManager()),
                         new PushAggregationThroughCardinalityPreservingLookupJoin(metadata),
                         new PushTopNThroughCardinalityPreservingJoin(metadata),
                         new TransformCountOverPairedNotEqualExistsToGroupedAggregation(metadata.getFunctionAndTypeManager()),
