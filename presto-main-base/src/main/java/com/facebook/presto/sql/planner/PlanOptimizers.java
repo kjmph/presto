@@ -792,7 +792,7 @@ public class PlanOptimizers
                                 new TransformDuplicateFactSumToFilteredAggregation(metadata.getFunctionAndTypeManager()),
                                 new PushAggregationThroughCardinalityPreservingLookupJoin(metadata),
                                 new PushTopNThroughCardinalityPreservingJoin(metadata),
-                                new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager()),
+                                new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager(), taskCountEstimator),
                                 new PreAggregateCountThroughOuterJoin(metadata.getFunctionAndTypeManager()),
                                 new PushAggregationThroughOuterJoin(metadata.getFunctionAndTypeManager()))),
                 inlineProjections,
@@ -1024,7 +1024,7 @@ public class PlanOptimizers
                         new PushAggregationThroughCardinalityPreservingLookupJoin(metadata),
                         new PushTopNThroughCardinalityPreservingJoin(metadata),
                         new TransformCountOverPairedNotEqualExistsToGroupedAggregation(metadata.getFunctionAndTypeManager()),
-                        new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager()),
+                        new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager(), taskCountEstimator),
                         new PreAggregateCountThroughOuterJoin(metadata.getFunctionAndTypeManager()),
                         new PushAggregationThroughOuterJoin(metadata.getFunctionAndTypeManager()))));
 

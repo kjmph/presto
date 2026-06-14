@@ -17,6 +17,7 @@ import com.facebook.presto.Session;
 import com.facebook.presto.common.type.BooleanType;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.cost.PlanNodeStatsEstimate;
+import com.facebook.presto.cost.TaskCountEstimator;
 import com.facebook.presto.expressions.RowExpressionRewriter;
 import com.facebook.presto.expressions.RowExpressionTreeRewriter;
 import com.facebook.presto.matching.Captures;
@@ -51,12 +52,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.facebook.presto.SystemSessionProperties.getJoinMaxBroadcastTableSize;
 import static com.facebook.presto.SystemSessionProperties.shouldPushAggregationThroughJoin;
 import static com.facebook.presto.common.type.DoubleType.DOUBLE;
 import static com.facebook.presto.common.type.RealType.REAL;
 import static com.facebook.presto.matching.Pattern.typeOf;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.Double.isNaN;
+import static java.lang.Math.max;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -101,11 +104,13 @@ public class PushJoinKeyFilterBelowAggregation
 
     private final FunctionAndTypeManager functionAndTypeManager;
     private final FunctionResolution functionResolution;
+    private final TaskCountEstimator taskCountEstimator;
 
-    public PushJoinKeyFilterBelowAggregation(FunctionAndTypeManager functionAndTypeManager)
+    public PushJoinKeyFilterBelowAggregation(FunctionAndTypeManager functionAndTypeManager, TaskCountEstimator taskCountEstimator)
     {
         this.functionAndTypeManager = requireNonNull(functionAndTypeManager, "functionAndTypeManager is null");
         this.functionResolution = new FunctionResolution(functionAndTypeManager.getFunctionAndTypeResolver());
+        this.taskCountEstimator = requireNonNull(taskCountEstimator, "taskCountEstimator is null");
     }
 
     @Override
@@ -166,7 +171,8 @@ public class PushJoinKeyFilterBelowAggregation
         if (!isSupportedAggregation(aggregation, aggregationJoinKey, join)
                 || !filteringSide.getOutputVariables().contains(filteringJoinKey)
                 || containsSemiJoin(aggregation.getSource(), context)
-                || !isFilteringSourceSelective(aggregation.getSource(), filteringSide, context)) {
+                || !isFilteringSourceSelective(aggregation.getSource(), filteringSide, context)
+                || !isFilteringSourceCheapToClone(filteringSide, context)) {
             return Optional.empty();
         }
 
@@ -319,6 +325,18 @@ public class PushJoinKeyFilterBelowAggregation
             return false;
         }
         return aggregationSourceRows / filteringSourceRows >= MIN_SELECTIVITY_GAIN;
+    }
+
+    private boolean isFilteringSourceCheapToClone(PlanNode filteringSource, Context context)
+    {
+        PlanNodeStatsEstimate filteringSourceStats = context.getStatsProvider().getStats(filteringSource);
+        double filteringSourceSizeInBytes = filteringSourceStats.getOutputSizeInBytes(filteringSource);
+        if (isNaN(filteringSourceSizeInBytes)) {
+            return false;
+        }
+
+        double replicatedFilteringSourceSizeInBytes = filteringSourceSizeInBytes * max(1, taskCountEstimator.estimateSourceDistributedTaskCount());
+        return replicatedFilteringSourceSizeInBytes <= getJoinMaxBroadcastTableSize(context.getSession()).toBytes();
     }
 
     private boolean containsSemiJoin(PlanNode node, Context context)
