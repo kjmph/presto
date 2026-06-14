@@ -25,6 +25,7 @@ import com.facebook.presto.spi.constraints.NotNullConstraint;
 import com.facebook.presto.spi.constraints.PrimaryKeyConstraint;
 import com.facebook.presto.spi.constraints.TableConstraint;
 import com.facebook.presto.spi.constraints.UniqueConstraint;
+import com.facebook.presto.spi.plan.AggregationNode;
 import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.FilterNode;
 import com.facebook.presto.spi.plan.JoinNode;
@@ -419,7 +420,7 @@ public class PushTopNThroughCardinalityPreservingJoin
             Session session,
             Context context)
     {
-        Optional<TableKeys> sourceTableKeys = traceToTableKeys(source, sourceKeys, session, context);
+        Optional<TableKeys> sourceTableKeys = traceSourceKeysToTableKeys(source, sourceKeys, session, context);
         Optional<TableKeys> targetTableKeys = traceToTableKeys(target, targetKeys, session, context);
         if (!sourceTableKeys.isPresent() || !targetTableKeys.isPresent()) {
             return false;
@@ -442,6 +443,66 @@ public class PushTopNThroughCardinalityPreservingJoin
             }
         }
         return false;
+    }
+
+    private Optional<TableKeys> traceSourceKeysToTableKeys(
+            PlanNode node,
+            List<VariableReferenceExpression> keys,
+            Session session,
+            Context context)
+    {
+        // The FK source may have been filtered, duplicated by joins, or grouped
+        // by the FK columns. Those operations preserve key lineage for proving
+        // that the next lookup join cannot drop or duplicate rows.
+        node = context.getLookup().resolve(node);
+        if (keys.isEmpty() || !node.getOutputVariables().containsAll(keys)) {
+            return Optional.empty();
+        }
+
+        if (node instanceof ProjectNode) {
+            ProjectNode project = (ProjectNode) node;
+            ImmutableList.Builder<VariableReferenceExpression> sourceKeys = ImmutableList.builder();
+            for (VariableReferenceExpression key : keys) {
+                RowExpression assignment = project.getAssignments().get(key);
+                if (!(assignment instanceof VariableReferenceExpression)) {
+                    return Optional.empty();
+                }
+                sourceKeys.add((VariableReferenceExpression) assignment);
+            }
+            return traceSourceKeysToTableKeys(project.getSource(), sourceKeys.build(), session, context);
+        }
+
+        if (node instanceof FilterNode) {
+            return traceSourceKeysToTableKeys(((FilterNode) node).getSource(), keys, session, context);
+        }
+
+        if (node instanceof AggregationNode) {
+            AggregationNode aggregation = (AggregationNode) node;
+            if (aggregation.getGroupingSetCount() != 1 ||
+                    aggregation.getGroupIdVariable().isPresent() ||
+                    !aggregation.getGroupingKeys().containsAll(keys)) {
+                return Optional.empty();
+            }
+            return traceSourceKeysToTableKeys(aggregation.getSource(), keys, session, context);
+        }
+
+        if (node instanceof JoinNode) {
+            JoinNode join = (JoinNode) node;
+            if (join.getType() != JoinType.INNER) {
+                return Optional.empty();
+            }
+
+            PlanNode left = context.getLookup().resolve(join.getLeft());
+            PlanNode right = context.getLookup().resolve(join.getRight());
+            boolean keysFromLeft = left.getOutputVariables().containsAll(keys);
+            boolean keysFromRight = right.getOutputVariables().containsAll(keys);
+            if (keysFromLeft == keysFromRight) {
+                return Optional.empty();
+            }
+            return traceSourceKeysToTableKeys(keysFromLeft ? left : right, keys, session, context);
+        }
+
+        return traceToTableKeys(node, keys, session, context);
     }
 
     private Optional<TableKeys> traceToTableKeys(
