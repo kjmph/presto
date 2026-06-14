@@ -165,11 +165,100 @@ public class PushTopNThroughCardinalityPreservingJoin
             return Optional.empty();
         }
 
-        Optional<PlanNode> rewritten = tryPushThroughNestedLookup(topN, rootJoin, true, context);
+        Optional<PlanNode> rewritten = tryPushThroughDirectLookup(topN, rootJoin, true, context);
+        if (!rewritten.isPresent()) {
+            rewritten = tryPushThroughDirectLookup(topN, rootJoin, false, context);
+        }
+        if (rewritten.isPresent()) {
+            return rewritten;
+        }
+
+        rewritten = tryPushThroughNestedLookup(topN, rootJoin, true, context);
         if (!rewritten.isPresent()) {
             rewritten = tryPushThroughNestedLookup(topN, rootJoin, false, context);
         }
         return rewritten;
+    }
+
+    private Optional<PlanNode> tryPushThroughDirectLookup(
+            TopNNode topN,
+            JoinNode join,
+            boolean lookupOnLeft,
+            Context context)
+    {
+        Optional<LookupSplit> split = trySplitLookupJoin(join, lookupOnLeft, context.getSession(), context);
+        if (!split.isPresent()) {
+            return Optional.empty();
+        }
+
+        PlanNode baseSide = split.get().getBaseSide();
+        PlanNode lookupSide = split.get().getLookupSide();
+        if (hasSameTopN(baseSide, topN)) {
+            return Optional.empty();
+        }
+        if (!baseSide.getOutputVariables().containsAll(topN.getOrderingScheme().getOrderByVariables())) {
+            return Optional.empty();
+        }
+
+        Set<VariableReferenceExpression> lookupOutputs = ImmutableSet.copyOf(lookupSide.getOutputVariables());
+        for (VariableReferenceExpression orderingVariable : topN.getOrderingScheme().getOrderByVariables()) {
+            if (lookupOutputs.contains(orderingVariable)) {
+                return Optional.empty();
+            }
+        }
+
+        TopNNode pushedTopN = new TopNNode(
+                topN.getSourceLocation(),
+                context.getIdAllocator().getNextId(),
+                baseSide,
+                topN.getCount(),
+                topN.getOrderingScheme(),
+                topN.getStep());
+
+        PlanNode finalLeft = lookupOnLeft ? lookupSide : pushedTopN;
+        PlanNode finalRight = lookupOnLeft ? pushedTopN : lookupSide;
+        Optional<List<EquiJoinClause>> finalCriteria = orientCriteria(join.getCriteria(), finalLeft, finalRight);
+        if (!finalCriteria.isPresent()) {
+            return Optional.empty();
+        }
+
+        if (!isValidJoinOutputOrder(join.getOutputVariables(), finalLeft, finalRight)) {
+            return Optional.empty();
+        }
+
+        JoinNode finalJoin = new JoinNode(
+                join.getSourceLocation(),
+                context.getIdAllocator().getNextId(),
+                JoinType.INNER,
+                finalLeft,
+                finalRight,
+                finalCriteria.get(),
+                join.getOutputVariables(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                emptyMap());
+
+        return Optional.of(new TopNNode(
+                topN.getSourceLocation(),
+                context.getIdAllocator().getNextId(),
+                finalJoin,
+                topN.getCount(),
+                topN.getOrderingScheme(),
+                topN.getStep()));
+    }
+
+    private boolean hasSameTopN(PlanNode node, TopNNode topN)
+    {
+        if (!(node instanceof TopNNode)) {
+            return false;
+        }
+
+        TopNNode existing = (TopNNode) node;
+        return existing.getCount() == topN.getCount() &&
+                existing.getStep() == topN.getStep() &&
+                existing.getOrderingScheme().equals(topN.getOrderingScheme());
     }
 
     private Optional<PlanNode> tryPushThroughNestedLookup(

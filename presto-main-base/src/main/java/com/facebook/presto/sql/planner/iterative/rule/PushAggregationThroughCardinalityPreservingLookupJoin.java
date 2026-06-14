@@ -14,6 +14,8 @@
 package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.common.predicate.Domain;
+import com.facebook.presto.common.predicate.TupleDomain;
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.metadata.FunctionAndTypeManager;
@@ -38,9 +40,11 @@ import com.facebook.presto.spi.plan.ProjectNode;
 import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.RowExpression;
+import com.facebook.presto.spi.relation.SpecialFormExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.VariablesExtractor;
 import com.facebook.presto.sql.planner.iterative.Rule;
+import com.facebook.presto.sql.relational.FunctionResolution;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -53,9 +57,11 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.facebook.presto.SystemSessionProperties.shouldPushAggregationThroughJoin;
+import static com.facebook.presto.expressions.LogicalRowExpressions.extractConjuncts;
 import static com.facebook.presto.matching.Pattern.typeOf;
 import static com.facebook.presto.spi.plan.AggregationNode.singleGroupingSet;
 import static com.facebook.presto.spi.plan.ProjectNode.Locality.LOCAL;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IS_NULL;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static java.util.Collections.emptyMap;
 import static java.util.Objects.requireNonNull;
@@ -99,11 +105,13 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
 
     private final Metadata metadata;
     private final FunctionAndTypeManager functionAndTypeManager;
+    private final FunctionResolution functionResolution;
 
     public PushAggregationThroughCardinalityPreservingLookupJoin(Metadata metadata)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.functionAndTypeManager = metadata.getFunctionAndTypeManager();
+        this.functionResolution = new FunctionResolution(functionAndTypeManager.getFunctionAndTypeResolver());
     }
 
     @Override
@@ -558,10 +566,11 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
         }
 
         if (node instanceof FilterNode) {
-            if (!allowFiltering) {
+            FilterNode filter = (FilterNode) node;
+            if (!allowFiltering && !isRedundantNotNullFilter(filter, context, session)) {
                 return Optional.empty();
             }
-            return traceToTableKeys(((FilterNode) node).getSource(), keys, context, session, allowFiltering);
+            return traceToTableKeys(filter.getSource(), keys, context, session, allowFiltering);
         }
 
         if (node instanceof JoinNode) {
@@ -582,7 +591,7 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
         }
 
         TableScanNode scan = (TableScanNode) node;
-        if (!allowFiltering && isConstrainedScan(scan)) {
+        if (!allowFiltering && hasNonRedundantConstraint(scan, session)) {
             return Optional.empty();
         }
 
@@ -601,10 +610,77 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
         return Optional.of(new TableKeys(scan, tableMetadata.getTable(), columns.build(), columnNames.build()));
     }
 
-    private boolean isConstrainedScan(TableScanNode scan)
+    private boolean isRedundantNotNullFilter(FilterNode filter, Context context, Session session)
     {
-        return (scan.getCurrentConstraint() != null && !scan.getCurrentConstraint().isAll()) ||
-                !scan.getEnforcedConstraint().isAll();
+        PlanNode source = context.getLookup().resolve(filter.getSource());
+        if (!(source instanceof TableScanNode)) {
+            return false;
+        }
+
+        TableScanNode scan = (TableScanNode) source;
+        for (RowExpression conjunct : extractConjuncts(filter.getPredicate())) {
+            Optional<VariableReferenceExpression> variable = extractIsNotNullVariable(conjunct);
+            if (!variable.isPresent()) {
+                return false;
+            }
+
+            ColumnHandle column = scan.getAssignments().get(variable.get());
+            if (column == null || !isKnownNotNull(scan, column, session)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private Optional<VariableReferenceExpression> extractIsNotNullVariable(RowExpression expression)
+    {
+        if (!(expression instanceof CallExpression)) {
+            return Optional.empty();
+        }
+
+        CallExpression call = (CallExpression) expression;
+        if (!functionResolution.isNotFunction(call.getFunctionHandle()) ||
+                call.getArguments().size() != 1 ||
+                !(call.getArguments().get(0) instanceof SpecialFormExpression)) {
+            return Optional.empty();
+        }
+
+        SpecialFormExpression isNull = (SpecialFormExpression) call.getArguments().get(0);
+        if (isNull.getForm() != IS_NULL ||
+                isNull.getArguments().size() != 1 ||
+                !(isNull.getArguments().get(0) instanceof VariableReferenceExpression)) {
+            return Optional.empty();
+        }
+
+        return Optional.of((VariableReferenceExpression) isNull.getArguments().get(0));
+    }
+
+    private boolean hasNonRedundantConstraint(TableScanNode scan, Session session)
+    {
+        return !isAllOrKnownNotNullOnly(scan, scan.getCurrentConstraint(), session) ||
+                !isAllOrKnownNotNullOnly(scan, scan.getEnforcedConstraint(), session);
+    }
+
+    private boolean isAllOrKnownNotNullOnly(TableScanNode scan, TupleDomain<ColumnHandle> constraint, Session session)
+    {
+        if (constraint == null || constraint.isAll()) {
+            return true;
+        }
+
+        if (!constraint.getDomains().isPresent()) {
+            return false;
+        }
+
+        for (Map.Entry<ColumnHandle, Domain> entry : constraint.getDomains().get().entrySet()) {
+            Domain domain = entry.getValue();
+            if (domain.isNullAllowed() || !domain.getValues().isAll()) {
+                return false;
+            }
+            if (!isKnownNotNull(scan, entry.getKey(), session)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private boolean areKnownNotNull(TableKeys tableKeys, Session session)
