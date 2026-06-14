@@ -154,11 +154,12 @@ public class PushJoinKeyFilterBelowAggregation
             boolean aggregationOnLeft,
             Context context)
     {
-        if (!(aggregationSide instanceof AggregationNode)) {
+        Optional<FilteredAggregation> filteredAggregation = getFilteredAggregation(aggregationSide, context);
+        if (!filteredAggregation.isPresent()) {
             return Optional.empty();
         }
 
-        AggregationNode aggregation = (AggregationNode) aggregationSide;
+        AggregationNode aggregation = filteredAggregation.get().getAggregation();
         VariableReferenceExpression aggregationJoinKey = aggregationOnLeft ? clause.getLeft() : clause.getRight();
         VariableReferenceExpression filteringJoinKey = aggregationOnLeft ? clause.getRight() : clause.getLeft();
 
@@ -214,12 +215,14 @@ public class PushJoinKeyFilterBelowAggregation
                 aggregation.getGroupIdVariable(),
                 aggregation.getAggregationId());
 
+        PlanNode rewrittenAggregationSide = filteredAggregation.get().withAggregation(rewrittenAggregation, context);
+
         JoinNode rewrittenJoin = new JoinNode(
                 join.getSourceLocation(),
                 context.getIdAllocator().getNextId(),
                 join.getType(),
-                aggregationOnLeft ? rewrittenAggregation : filteringSide,
-                aggregationOnLeft ? filteringSide : rewrittenAggregation,
+                aggregationOnLeft ? rewrittenAggregationSide : filteringSide,
+                aggregationOnLeft ? filteringSide : rewrittenAggregationSide,
                 join.getCriteria(),
                 join.getOutputVariables(),
                 join.getFilter(),
@@ -229,6 +232,23 @@ public class PushJoinKeyFilterBelowAggregation
                 join.getDynamicFilters());
 
         return Optional.of(new Rewrite(rewrittenJoin));
+    }
+
+    private Optional<FilteredAggregation> getFilteredAggregation(PlanNode node, Context context)
+    {
+        if (node instanceof AggregationNode) {
+            return Optional.of(new FilteredAggregation((AggregationNode) node, Optional.empty()));
+        }
+
+        if (node instanceof FilterNode) {
+            FilterNode filter = (FilterNode) node;
+            PlanNode source = context.getLookup().resolve(filter.getSource());
+            if (source instanceof AggregationNode) {
+                return Optional.of(new FilteredAggregation((AggregationNode) source, Optional.of(filter)));
+            }
+        }
+
+        return Optional.empty();
     }
 
     private boolean isSupportedAggregation(AggregationNode aggregation, VariableReferenceExpression joinKey, JoinNode join)
@@ -328,6 +348,37 @@ public class PushJoinKeyFilterBelowAggregation
         private JoinNode getJoin()
         {
             return join;
+        }
+    }
+
+    private static class FilteredAggregation
+    {
+        private final AggregationNode aggregation;
+        private final Optional<FilterNode> filter;
+
+        private FilteredAggregation(AggregationNode aggregation, Optional<FilterNode> filter)
+        {
+            this.aggregation = aggregation;
+            this.filter = filter;
+        }
+
+        private AggregationNode getAggregation()
+        {
+            return aggregation;
+        }
+
+        private PlanNode withAggregation(AggregationNode rewrittenAggregation, Context context)
+        {
+            if (!filter.isPresent()) {
+                return rewrittenAggregation;
+            }
+
+            FilterNode originalFilter = filter.get();
+            return new FilterNode(
+                    originalFilter.getSourceLocation(),
+                    context.getIdAllocator().getNextId(),
+                    rewrittenAggregation,
+                    originalFilter.getPredicate());
         }
     }
 
