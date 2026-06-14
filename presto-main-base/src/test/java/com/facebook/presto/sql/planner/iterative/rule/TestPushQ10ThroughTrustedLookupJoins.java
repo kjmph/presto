@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.SchemaTableName;
@@ -32,6 +33,7 @@ import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.TestTableConstraintsConnectorFactory;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
+import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
 import com.facebook.presto.sql.planner.iterative.rule.test.RuleTester;
 import com.facebook.presto.testing.TestingTransactionHandle;
 import com.facebook.presto.tpch.TpchColumnHandle;
@@ -46,6 +48,7 @@ import org.testng.annotations.Test;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.common.type.DoubleType.DOUBLE;
@@ -59,13 +62,20 @@ public class TestPushQ10ThroughTrustedLookupJoins
         extends BaseRuleTest
 {
     private TableHandle ordersTableHandle;
+    private TableHandle lineitemTableHandle;
     private TableHandle customerTableHandle;
     private TableHandle nationTableHandle;
 
+    private ColumnHandle lineitemOrderkeyColumn;
+    private ColumnHandle lineitemExtendedpriceColumn;
     private ColumnHandle ordersCustkeyColumn;
+    private ColumnHandle ordersOrderkeyColumn;
     private ColumnHandle ordersTotalpriceColumn;
     private ColumnHandle customerCustkeyColumn;
     private ColumnHandle customerNameColumn;
+    private ColumnHandle customerAddressColumn;
+    private ColumnHandle customerPhoneColumn;
+    private ColumnHandle customerCommentColumn;
     private ColumnHandle customerAcctbalColumn;
     private ColumnHandle customerNationkeyColumn;
     private ColumnHandle nationNationkeyColumn;
@@ -79,17 +89,25 @@ public class TestPushQ10ThroughTrustedLookupJoins
         ConnectorId connectorId = tester().getCurrentConnectorId();
 
         TpchTableHandle ordersTpchTableHandle = new TpchTableHandle("orders", 1.0);
+        TpchTableHandle lineitemTpchTableHandle = new TpchTableHandle("lineitem", 1.0);
         TpchTableHandle customerTpchTableHandle = new TpchTableHandle("customer", 1.0);
         TpchTableHandle nationTpchTableHandle = new TpchTableHandle("nation", 1.0);
 
         ordersTableHandle = tableHandle(connectorId, ordersTpchTableHandle);
+        lineitemTableHandle = tableHandle(connectorId, lineitemTpchTableHandle);
         customerTableHandle = tableHandle(connectorId, customerTpchTableHandle);
         nationTableHandle = tableHandle(connectorId, nationTpchTableHandle);
 
+        lineitemOrderkeyColumn = new TpchColumnHandle("orderkey", BIGINT);
+        lineitemExtendedpriceColumn = new TpchColumnHandle("extendedprice", DOUBLE);
         ordersCustkeyColumn = new TpchColumnHandle("custkey", BIGINT);
+        ordersOrderkeyColumn = new TpchColumnHandle("orderkey", BIGINT);
         ordersTotalpriceColumn = new TpchColumnHandle("totalprice", DOUBLE);
         customerCustkeyColumn = new TpchColumnHandle("custkey", BIGINT);
         customerNameColumn = new TpchColumnHandle("name", VARCHAR);
+        customerAddressColumn = new TpchColumnHandle("address", VARCHAR);
+        customerPhoneColumn = new TpchColumnHandle("phone", VARCHAR);
+        customerCommentColumn = new TpchColumnHandle("comment", VARCHAR);
         customerAcctbalColumn = new TpchColumnHandle("acctbal", DOUBLE);
         customerNationkeyColumn = new TpchColumnHandle("nationkey", BIGINT);
         nationNationkeyColumn = new TpchColumnHandle("nationkey", BIGINT);
@@ -97,21 +115,147 @@ public class TestPushQ10ThroughTrustedLookupJoins
     }
 
     @Test
-    public void testQ10TopNIsPushedBelowTrustedLookupPayloads()
+    public void testQ10TopNIsPushedBelowFullTrustedLookupPayloads()
     {
+        VariableReferenceExpression lOrderkey = variable("l_orderkey", BIGINT);
+        VariableReferenceExpression lExtendedprice = variable("l_extendedprice", DOUBLE);
+        VariableReferenceExpression oOrderkey = variable("o_orderkey", BIGINT);
+        VariableReferenceExpression oCustkey = variable("o_custkey", BIGINT);
+        VariableReferenceExpression cCustkey = variable("c_custkey", BIGINT);
+        VariableReferenceExpression cName = variable("c_name", VARCHAR);
+        VariableReferenceExpression cAddress = variable("c_address", VARCHAR);
+        VariableReferenceExpression cPhone = variable("c_phone", VARCHAR);
+        VariableReferenceExpression cComment = variable("c_comment", VARCHAR);
+        VariableReferenceExpression cAcctbal = variable("c_acctbal", DOUBLE);
+        VariableReferenceExpression cNationkey = variable("c_nationkey", BIGINT);
+        VariableReferenceExpression nNationkey = variable("n_nationkey", BIGINT);
+        VariableReferenceExpression nName = variable("n_name", VARCHAR);
+        VariableReferenceExpression revenue = variable("revenue", DOUBLE);
+        Set<VariableReferenceExpression> lookupPayloads = ImmutableSet.of(cCustkey, cName, cAcctbal, cPhone, nName, cAddress, cComment);
+
         tester.assertThat(ImmutableSet.of(
                         new PushAggregationThroughCardinalityPreservingLookupJoin(tester.getMetadata()),
                         new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata())))
                 .on(p -> {
-                    VariableReferenceExpression oCustkey = p.variable("o_custkey", BIGINT);
-                    VariableReferenceExpression revenueInput = p.variable("revenue_input", DOUBLE);
-                    VariableReferenceExpression cCustkey = p.variable("c_custkey", BIGINT);
-                    VariableReferenceExpression cName = p.variable("c_name", VARCHAR);
-                    VariableReferenceExpression cAcctbal = p.variable("c_acctbal", DOUBLE);
-                    VariableReferenceExpression cNationkey = p.variable("c_nationkey", BIGINT);
-                    VariableReferenceExpression nNationkey = p.variable("n_nationkey", BIGINT);
-                    VariableReferenceExpression nName = p.variable("n_name", VARCHAR);
-                    VariableReferenceExpression revenue = p.variable("revenue", DOUBLE);
+                    registerVariables(
+                            p,
+                            lOrderkey,
+                            lExtendedprice,
+                            oOrderkey,
+                            oCustkey,
+                            cCustkey,
+                            cName,
+                            cAddress,
+                            cPhone,
+                            cComment,
+                            cAcctbal,
+                            cNationkey,
+                            nNationkey,
+                            nName,
+                            revenue);
+
+                    TableScanNode lineitem = p.tableScan(
+                            lineitemTableHandle,
+                            ImmutableList.of(lOrderkey, lExtendedprice),
+                            ImmutableMap.of(lOrderkey, lineitemOrderkeyColumn, lExtendedprice, lineitemExtendedpriceColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            tester.getTableConstraints(lineitemTableHandle));
+                    TableScanNode orders = p.tableScan(
+                            ordersTableHandle,
+                            ImmutableList.of(oOrderkey, oCustkey),
+                            ImmutableMap.of(oOrderkey, ordersOrderkeyColumn, oCustkey, ordersCustkeyColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            constraintsWith(
+                                    ordersTableHandle,
+                                    new ForeignKeyConstraint<>(
+                                            Optional.of("fk_orders_customer"),
+                                            new LinkedHashSet<>(ImmutableList.of(ordersCustkeyColumn)),
+                                            new SchemaTableName("sf1.0", "customer"),
+                                            new LinkedHashSet<>(ImmutableList.of("custkey")),
+                                            false,
+                                            true,
+                                            false)));
+                    TableScanNode customer = p.tableScan(
+                            customerTableHandle,
+                            ImmutableList.of(cCustkey, cName, cAddress, cPhone, cComment, cAcctbal, cNationkey),
+                            ImmutableMap.of(
+                                    cCustkey, customerCustkeyColumn,
+                                    cName, customerNameColumn,
+                                    cAddress, customerAddressColumn,
+                                    cPhone, customerPhoneColumn,
+                                    cComment, customerCommentColumn,
+                                    cAcctbal, customerAcctbalColumn,
+                                    cNationkey, customerNationkeyColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            constraintsWith(
+                                    customerTableHandle,
+                                    new ForeignKeyConstraint<>(
+                                            Optional.of("fk_customer_nation"),
+                                            new LinkedHashSet<>(ImmutableList.of(customerNationkeyColumn)),
+                                            new SchemaTableName("sf1.0", "nation"),
+                                            new LinkedHashSet<>(ImmutableList.of("nationkey")),
+                                            false,
+                                            true,
+                                            false)));
+                    TableScanNode nation = p.tableScan(
+                            nationTableHandle,
+                            ImmutableList.of(nNationkey, nName),
+                            ImmutableMap.of(nNationkey, nationNationkeyColumn, nName, nationNameColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            tester.getTableConstraints(nationTableHandle));
+
+                    JoinNode ordersJoin = p.join(
+                            JoinType.INNER,
+                            lineitem,
+                            orders,
+                            new EquiJoinClause(lOrderkey, oOrderkey));
+                    JoinNode customerJoin = p.join(
+                            JoinType.INNER,
+                            customer,
+                            ordersJoin,
+                            new EquiJoinClause(cCustkey, oCustkey));
+                    JoinNode nationJoin = p.join(
+                            JoinType.INNER,
+                            customerJoin,
+                            nation,
+                            new EquiJoinClause(cNationkey, nNationkey));
+
+                    AggregationNode aggregation = p.aggregation(builder -> builder
+                            .singleGroupingSet(cCustkey, cName, cAcctbal, cPhone, nName, cAddress, cComment)
+                            .addAggregation(revenue, p.rowExpression("sum(l_extendedprice)"))
+                            .source(nationJoin));
+
+                    return p.topN(20, ImmutableList.of(revenue), aggregation);
+                })
+                .validates(plan -> assertQ10Shape(
+                        plan,
+                        lookupPayloads,
+                        oCustkey));
+    }
+
+    @Test
+    public void testQ10TopNIsPushedBelowTrustedLookupPayloads()
+    {
+        VariableReferenceExpression oCustkey = variable("o_custkey", BIGINT);
+        VariableReferenceExpression revenueInput = variable("revenue_input", DOUBLE);
+        VariableReferenceExpression cCustkey = variable("c_custkey", BIGINT);
+        VariableReferenceExpression cName = variable("c_name", VARCHAR);
+        VariableReferenceExpression cAcctbal = variable("c_acctbal", DOUBLE);
+        VariableReferenceExpression cNationkey = variable("c_nationkey", BIGINT);
+        VariableReferenceExpression nNationkey = variable("n_nationkey", BIGINT);
+        VariableReferenceExpression nName = variable("n_name", VARCHAR);
+        VariableReferenceExpression revenue = variable("revenue", DOUBLE);
+        Set<VariableReferenceExpression> lookupPayloads = ImmutableSet.of(cCustkey, cName, cAcctbal, nName);
+
+        tester.assertThat(ImmutableSet.of(
+                        new PushAggregationThroughCardinalityPreservingLookupJoin(tester.getMetadata()),
+                        new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata())))
+                .on(p -> {
+                    registerVariables(p, oCustkey, revenueInput, cCustkey, cName, cAcctbal, cNationkey, nNationkey, nName, revenue);
 
                     TableScanNode orders = p.tableScan(
                             ordersTableHandle,
@@ -185,29 +329,235 @@ public class TestPushQ10ThroughTrustedLookupJoins
 
                     return p.topN(20, ImmutableList.of(revenue), aggregation);
                 })
-                .validates(this::assertQ10Shape);
+                .validates(plan -> assertQ10Shape(
+                        plan,
+                        lookupPayloads,
+                        oCustkey));
     }
 
-    private void assertQ10Shape(Plan plan)
+    @Test
+    public void testQ10ResidualFinalAggregationIsProjectedFromPreAggregation()
     {
-        assertFalse(
-                searchFrom(plan.getRoot())
-                        .where(node -> node instanceof AggregationNode &&
-                                ((AggregationNode) node).getGroupingKeys().stream()
-                                        .map(VariableReferenceExpression::getName)
-                                        .anyMatch(name -> name.startsWith("c_") || name.startsWith("n_")))
-                        .matches(),
-                "lookup payload columns should not remain in aggregation grouping keys");
+        VariableReferenceExpression oCustkey = variable("o_custkey", BIGINT);
+        VariableReferenceExpression revenueInput = variable("revenue_input", DOUBLE);
+        VariableReferenceExpression preRevenue = variable("pre_revenue", DOUBLE);
+        VariableReferenceExpression cCustkey = variable("c_custkey", BIGINT);
+        VariableReferenceExpression cName = variable("c_name", VARCHAR);
+        VariableReferenceExpression cAcctbal = variable("c_acctbal", DOUBLE);
+        VariableReferenceExpression cNationkey = variable("c_nationkey", BIGINT);
+        VariableReferenceExpression nNationkey = variable("n_nationkey", BIGINT);
+        VariableReferenceExpression nName = variable("n_name", VARCHAR);
+        VariableReferenceExpression revenue = variable("revenue", DOUBLE);
+        Set<VariableReferenceExpression> lookupPayloads = ImmutableSet.of(cCustkey, cName, cAcctbal, nName);
+
+        tester.assertThat(ImmutableSet.of(new PushAggregationThroughCardinalityPreservingLookupJoin(tester.getMetadata())))
+                .on(p -> {
+                    registerVariables(p, oCustkey, revenueInput, preRevenue, cCustkey, cName, cAcctbal, cNationkey, nNationkey, nName, revenue);
+
+                    TableScanNode orders = p.tableScan(
+                            ordersTableHandle,
+                            ImmutableList.of(oCustkey, revenueInput),
+                            ImmutableMap.of(oCustkey, ordersCustkeyColumn, revenueInput, ordersTotalpriceColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            constraintsWith(
+                                    ordersTableHandle,
+                                    new ForeignKeyConstraint<>(
+                                            Optional.of("fk_orders_customer"),
+                                            new LinkedHashSet<>(ImmutableList.of(ordersCustkeyColumn)),
+                                            new SchemaTableName("sf1.0", "customer"),
+                                            new LinkedHashSet<>(ImmutableList.of("custkey")),
+                                            false,
+                                            true,
+                                            false)));
+                    TableScanNode customer = p.tableScan(
+                            customerTableHandle,
+                            ImmutableList.of(cCustkey, cName, cAcctbal, cNationkey),
+                            ImmutableMap.of(
+                                    cCustkey, customerCustkeyColumn,
+                                    cName, customerNameColumn,
+                                    cAcctbal, customerAcctbalColumn,
+                                    cNationkey, customerNationkeyColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            constraintsWith(
+                                    customerTableHandle,
+                                    new ForeignKeyConstraint<>(
+                                            Optional.of("fk_customer_nation"),
+                                            new LinkedHashSet<>(ImmutableList.of(customerNationkeyColumn)),
+                                            new SchemaTableName("sf1.0", "nation"),
+                                            new LinkedHashSet<>(ImmutableList.of("nationkey")),
+                                            false,
+                                            true,
+                                            false)));
+                    TableScanNode nation = p.tableScan(
+                            nationTableHandle,
+                            ImmutableList.of(nNationkey, nName),
+                            ImmutableMap.of(nNationkey, nationNationkeyColumn, nName, nationNameColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            tester.getTableConstraints(nationTableHandle));
+
+                    AggregationNode preAggregation = p.aggregation(builder -> builder
+                            .singleGroupingSet(oCustkey)
+                            .addAggregation(preRevenue, p.rowExpression("sum(revenue_input)"))
+                            .source(orders));
+
+                    JoinNode customerJoin = p.join(
+                            JoinType.INNER,
+                            customer,
+                            preAggregation,
+                            new EquiJoinClause(cCustkey, oCustkey));
+                    JoinNode nationJoin = p.join(
+                            JoinType.INNER,
+                            customerJoin,
+                            nation,
+                            new EquiJoinClause(cNationkey, nNationkey));
+
+                    return p.aggregation(builder -> builder
+                            .singleGroupingSet(cCustkey, cName, cAcctbal, nName)
+                            .addAggregation(revenue, p.rowExpression("sum(pre_revenue)"))
+                            .source(nationJoin));
+                })
+                .validates(plan -> assertNoLookupPayloadAggregation(
+                        plan,
+                        lookupPayloads));
+    }
+
+    @Test
+    public void testQ10FirstLookupRewriteDoesNotKeepNationPayloadAggregation()
+    {
+        VariableReferenceExpression oCustkey = variable("o_custkey", BIGINT);
+        VariableReferenceExpression revenueInput = variable("revenue_input", DOUBLE);
+        VariableReferenceExpression preRevenue = variable("pre_revenue", DOUBLE);
+        VariableReferenceExpression cCustkey = variable("c_custkey", BIGINT);
+        VariableReferenceExpression cName = variable("c_name", VARCHAR);
+        VariableReferenceExpression cAcctbal = variable("c_acctbal", DOUBLE);
+        VariableReferenceExpression cPhone = variable("c_phone", VARCHAR);
+        VariableReferenceExpression cAddress = variable("c_address", VARCHAR);
+        VariableReferenceExpression cComment = variable("c_comment", VARCHAR);
+        VariableReferenceExpression cNationkey = variable("c_nationkey", BIGINT);
+        VariableReferenceExpression nNationkey = variable("n_nationkey", BIGINT);
+        VariableReferenceExpression nName = variable("n_name", VARCHAR);
+        VariableReferenceExpression revenue = variable("revenue", DOUBLE);
+
+        tester.assertThat(ImmutableSet.of(new PushAggregationThroughCardinalityPreservingLookupJoin(tester.getMetadata())))
+                .on(p -> {
+                    registerVariables(
+                            p,
+                            oCustkey,
+                            revenueInput,
+                            preRevenue,
+                            cCustkey,
+                            cName,
+                            cAcctbal,
+                            cPhone,
+                            cAddress,
+                            cComment,
+                            cNationkey,
+                            nNationkey,
+                            nName,
+                            revenue);
+
+                    TableScanNode orders = p.tableScan(
+                            ordersTableHandle,
+                            ImmutableList.of(oCustkey, revenueInput),
+                            ImmutableMap.of(oCustkey, ordersCustkeyColumn, revenueInput, ordersTotalpriceColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            constraintsWith(
+                                    ordersTableHandle,
+                                    new ForeignKeyConstraint<>(
+                                            Optional.of("fk_orders_customer"),
+                                            new LinkedHashSet<>(ImmutableList.of(ordersCustkeyColumn)),
+                                            new SchemaTableName("sf1.0", "customer"),
+                                            new LinkedHashSet<>(ImmutableList.of("custkey")),
+                                            false,
+                                            true,
+                                            false)));
+                    TableScanNode customer = p.tableScan(
+                            customerTableHandle,
+                            ImmutableList.of(cCustkey, cName, cAcctbal, cPhone, cAddress, cComment, cNationkey),
+                            ImmutableMap.of(
+                                    cCustkey, customerCustkeyColumn,
+                                    cName, customerNameColumn,
+                                    cAcctbal, customerAcctbalColumn,
+                                    cPhone, customerPhoneColumn,
+                                    cAddress, customerAddressColumn,
+                                    cComment, customerCommentColumn,
+                                    cNationkey, customerNationkeyColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            constraintsWith(
+                                    customerTableHandle,
+                                    new ForeignKeyConstraint<>(
+                                            Optional.of("fk_customer_nation"),
+                                            new LinkedHashSet<>(ImmutableList.of(customerNationkeyColumn)),
+                                            new SchemaTableName("sf1.0", "nation"),
+                                            new LinkedHashSet<>(ImmutableList.of("nationkey")),
+                                            false,
+                                            true,
+                                            false)));
+                    TableScanNode nation = p.tableScan(
+                            nationTableHandle,
+                            ImmutableList.of(nNationkey, nName),
+                            ImmutableMap.of(nNationkey, nationNationkeyColumn, nName, nationNameColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            tester.getTableConstraints(nationTableHandle));
+
+                    JoinNode customerOrders = p.join(
+                            JoinType.INNER,
+                            customer,
+                            orders,
+                            new EquiJoinClause(cCustkey, oCustkey));
+                    AggregationNode preAggregation = p.aggregation(builder -> builder
+                            .singleGroupingSet(cCustkey, cName, cAcctbal, cPhone, cAddress, cComment, cNationkey)
+                            .addAggregation(preRevenue, p.rowExpression("sum(revenue_input)"))
+                            .source(customerOrders));
+                    JoinNode nationJoin = p.join(
+                            JoinType.INNER,
+                            preAggregation,
+                            nation,
+                            new EquiJoinClause(cNationkey, nNationkey));
+
+                    return p.aggregation(builder -> builder
+                            .singleGroupingSet(cCustkey, cName, cAcctbal, cPhone, nName, cAddress, cComment)
+                            .addAggregation(revenue, p.rowExpression("sum(pre_revenue)"))
+                            .source(nationJoin));
+                })
+                .validates(plan -> assertNoLookupPayloadAggregation(
+                        plan,
+                        ImmutableSet.of(nName)));
+    }
+
+    private void assertQ10Shape(
+            Plan plan,
+            Set<VariableReferenceExpression> lookupPayloads,
+            VariableReferenceExpression preAggregationKey)
+    {
+        assertNoLookupPayloadAggregation(plan, lookupPayloads);
 
         assertTrue(
                 searchFrom(plan.getRoot())
                         .where(node -> node instanceof TopNNode &&
                                 ((TopNNode) node).getSource() instanceof AggregationNode &&
                                 ((AggregationNode) ((TopNNode) node).getSource()).getGroupingKeys().stream()
-                                        .map(VariableReferenceExpression::getName)
-                                        .allMatch("o_custkey"::equals))
+                                        .allMatch(preAggregationKey::equals))
                         .matches(),
-                "TopN should be applied directly above the narrow pre-aggregation by o_custkey\n" + formatTree(plan.getRoot(), 0));
+                "TopN should be applied directly above the narrow pre-aggregation key\n" + formatTree(plan.getRoot(), 0));
+    }
+
+    private void assertNoLookupPayloadAggregation(
+            Plan plan,
+            Set<VariableReferenceExpression> lookupPayloads)
+    {
+        assertFalse(
+                searchFrom(plan.getRoot())
+                        .where(node -> node instanceof AggregationNode &&
+                                ((AggregationNode) node).getGroupingKeys().stream().anyMatch(lookupPayloads::contains))
+                        .matches(),
+                "lookup payload columns should not remain in aggregation grouping keys\n" + formatTree(plan.getRoot(), 0));
     }
 
     private List<TableConstraint<ColumnHandle>> constraintsWith(TableHandle tableHandle, TableConstraint<ColumnHandle> constraint)
@@ -225,6 +575,18 @@ public class TestPushQ10ThroughTrustedLookupJoins
                 tpchTableHandle,
                 TestingTransactionHandle.create(),
                 Optional.of(new TpchTableLayoutHandle(tpchTableHandle, TupleDomain.all())));
+    }
+
+    private static VariableReferenceExpression variable(String name, Type type)
+    {
+        return new VariableReferenceExpression(Optional.empty(), name, type);
+    }
+
+    private static void registerVariables(PlanBuilder planBuilder, VariableReferenceExpression... variables)
+    {
+        for (VariableReferenceExpression variable : variables) {
+            planBuilder.registerVariable(variable);
+        }
     }
 
     private static String formatTree(PlanNode node, int indent)

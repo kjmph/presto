@@ -143,9 +143,6 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
             project = Optional.of((ProjectNode) source);
             source = context.getLookup().resolve(project.get().getSource());
         }
-        if (!project.isPresent()) {
-            return Result.empty();
-        }
 
         if (!(source instanceof JoinNode)) {
             return Result.empty();
@@ -162,10 +159,6 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
         }
 
         PlanNode base = peel.get().getBase();
-        if (containsAggregation(base, context)) {
-            return Result.empty();
-        }
-
         Set<VariableReferenceExpression> baseOutputs = ImmutableSet.copyOf(base.getOutputVariables());
 
         ImmutableSet.Builder<VariableReferenceExpression> aggregateInputVariables = ImmutableSet.builder();
@@ -210,6 +203,12 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
             return Result.empty();
         }
 
+        if (containsAggregation(base, context)) {
+            return tryProjectPreAggregatedResult(aggregation, project, base, preGroupingKeys, peel.get().getLookups(), context)
+                    .map(Result::ofPlanNode)
+                    .orElseGet(Result::empty);
+        }
+
         ProjectNode preProject = new ProjectNode(
                 aggregation.getSourceLocation(),
                 context.getIdAllocator().getNextId(),
@@ -241,34 +240,14 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
                 Optional.empty(),
                 Optional.of(aggregationId));
 
-        PlanNode rewritten = preAggregation;
-        List<LookupJoin> lookups = peel.get().getLookups();
-        for (int i = lookups.size() - 1; i >= 0; i--) {
-            LookupJoin lookup = lookups.get(i);
-            if (!rewritten.getOutputVariables().containsAll(lookup.getBaseKeys())) {
-                return Result.empty();
-            }
-
-            LinkedHashSet<VariableReferenceExpression> outputs = new LinkedHashSet<>();
-            outputs.addAll(rewritten.getOutputVariables());
-            outputs.addAll(lookup.getLookupSide().getOutputVariables());
-
-            rewritten = new JoinNode(
-                    lookup.getSource().getSourceLocation(),
-                    context.getIdAllocator().getNextId(),
-                    JoinType.INNER,
-                    rewritten,
-                    lookup.getLookupSide(),
-                    lookup.getCriteria(),
-                    ImmutableList.copyOf(outputs),
-                    Optional.empty(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    emptyMap());
+        Optional<PlanNode> restoredLookupJoins = restoreLookupJoins(preAggregation, peel.get().getLookups(), context);
+        if (!restoredLookupJoins.isPresent()) {
+            return Result.empty();
         }
+        PlanNode rewritten = restoredLookupJoins.get();
 
-        if (canProjectPreAggregations(aggregation.getGroupingKeys(), preGroupingKeys, peel.get().getLookups())) {
+        if (canProjectPreAggregations(aggregation.getGroupingKeys(), preGroupingKeys, peel.get().getLookups()) ||
+                isKnownUnique(rewritten, aggregation.getGroupingKeys(), context)) {
             Assignments.Builder finalAssignments = Assignments.builder();
             for (VariableReferenceExpression variable : aggregation.getOutputVariables()) {
                 finalAssignments.put(variable, preAggregateOutputMap.getOrDefault(variable, variable));
@@ -301,6 +280,105 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
                 finalAggregation,
                 finalAssignments.build(),
                 LOCAL));
+    }
+
+    private Optional<PlanNode> tryProjectPreAggregatedResult(
+            AggregationNode aggregation,
+            Optional<ProjectNode> project,
+            PlanNode base,
+            Set<VariableReferenceExpression> preGroupingKeys,
+            List<LookupJoin> lookups,
+            Context context)
+    {
+        Optional<PlanNode> restoredLookupJoins = restoreLookupJoins(base, lookups, context);
+        if (!restoredLookupJoins.isPresent()) {
+            return Optional.empty();
+        }
+
+        PlanNode rewritten = restoredLookupJoins.get();
+        if (!canProjectPreAggregations(aggregation.getGroupingKeys(), preGroupingKeys, lookups) &&
+                !isKnownUnique(rewritten, aggregation.getGroupingKeys(), context)) {
+            return Optional.empty();
+        }
+
+        if (!isKnownUnique(rewritten, aggregation.getGroupingKeys(), context) &&
+                !isKnownUnique(base, ImmutableList.copyOf(preGroupingKeys), context)) {
+            return Optional.empty();
+        }
+
+        Assignments.Builder assignments = Assignments.builder();
+        for (VariableReferenceExpression variable : aggregation.getOutputVariables()) {
+            AggregationNode.Aggregation aggregate = aggregation.getAggregations().get(variable);
+            if (aggregate == null) {
+                if (!rewritten.getOutputVariables().contains(variable)) {
+                    return Optional.empty();
+                }
+                assignments.put(variable, variable);
+                continue;
+            }
+
+            Optional<VariableReferenceExpression> preAggregateOutput = mapAggregationInputVariable(aggregate, project);
+            if (!preAggregateOutput.isPresent() || !rewritten.getOutputVariables().contains(preAggregateOutput.get())) {
+                return Optional.empty();
+            }
+            assignments.put(variable, preAggregateOutput.get());
+        }
+
+        return Optional.of(new ProjectNode(
+                aggregation.getSourceLocation(),
+                context.getIdAllocator().getNextId(),
+                rewritten,
+                assignments.build(),
+                LOCAL));
+    }
+
+    private Optional<PlanNode> restoreLookupJoins(
+            PlanNode base,
+            List<LookupJoin> lookups,
+            Context context)
+    {
+        PlanNode rewritten = base;
+        for (int i = lookups.size() - 1; i >= 0; i--) {
+            LookupJoin lookup = lookups.get(i);
+            if (!rewritten.getOutputVariables().containsAll(lookup.getBaseKeys())) {
+                return Optional.empty();
+            }
+
+            LinkedHashSet<VariableReferenceExpression> outputs = new LinkedHashSet<>();
+            outputs.addAll(rewritten.getOutputVariables());
+            outputs.addAll(lookup.getLookupSide().getOutputVariables());
+
+            rewritten = new JoinNode(
+                    lookup.getSource().getSourceLocation(),
+                    context.getIdAllocator().getNextId(),
+                    JoinType.INNER,
+                    rewritten,
+                    lookup.getLookupSide(),
+                    lookup.getCriteria(),
+                    ImmutableList.copyOf(outputs),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    emptyMap());
+        }
+        return Optional.of(rewritten);
+    }
+
+    private Optional<VariableReferenceExpression> mapAggregationInputVariable(
+            AggregationNode.Aggregation aggregation,
+            Optional<ProjectNode> project)
+    {
+        if (aggregation.getArguments().size() != 1 ||
+                !(aggregation.getArguments().get(0) instanceof VariableReferenceExpression)) {
+            return Optional.empty();
+        }
+
+        Optional<RowExpression> mapped = mapThroughProject((VariableReferenceExpression) aggregation.getArguments().get(0), project);
+        if (!mapped.isPresent() || !(mapped.get() instanceof VariableReferenceExpression)) {
+            return Optional.empty();
+        }
+        return Optional.of((VariableReferenceExpression) mapped.get());
     }
 
     private boolean canProjectPreAggregations(
@@ -573,6 +651,17 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
             return traceToTableKeys(filter.getSource(), keys, context, session, allowFiltering);
         }
 
+        if (node instanceof AggregationNode) {
+            AggregationNode aggregation = (AggregationNode) node;
+            if (!allowFiltering ||
+                    aggregation.getGroupingSetCount() != 1 ||
+                    aggregation.getGroupIdVariable().isPresent() ||
+                    !aggregation.getGroupingKeys().containsAll(keys)) {
+                return Optional.empty();
+            }
+            return traceToTableKeys(aggregation.getSource(), keys, context, session, allowFiltering);
+        }
+
         if (node instanceof JoinNode) {
             JoinNode join = (JoinNode) node;
             PlanNode left = context.getLookup().resolve(join.getLeft());
@@ -729,6 +818,76 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
             return isKnownUnique(((FilterNode) node).getSource(), variables, context);
         }
 
+        if (node instanceof AggregationNode) {
+            AggregationNode aggregation = (AggregationNode) node;
+            if (aggregation.getGroupingSetCount() != 1 ||
+                    aggregation.getGroupIdVariable().isPresent()) {
+                return false;
+            }
+
+            Set<VariableReferenceExpression> groupingKeys = ImmutableSet.copyOf(aggregation.getGroupingKeys());
+            if (variables.containsAll(groupingKeys)) {
+                return true;
+            }
+
+            if (!groupingKeys.containsAll(variables)) {
+                return false;
+            }
+
+            return functionallyDetermines(
+                    aggregation.getSource(),
+                    ImmutableSet.copyOf(variables),
+                    groupingKeys,
+                    context);
+        }
+
+        if (node instanceof JoinNode) {
+            JoinNode join = (JoinNode) node;
+            if (!isPlainInnerJoin(join)) {
+                return false;
+            }
+
+            PlanNode left = context.getLookup().resolve(join.getLeft());
+            PlanNode right = context.getLookup().resolve(join.getRight());
+
+            ImmutableList.Builder<VariableReferenceExpression> leftVariables = ImmutableList.builder();
+            ImmutableList.Builder<VariableReferenceExpression> rightVariables = ImmutableList.builder();
+            for (VariableReferenceExpression variable : variables) {
+                boolean fromLeft = left.getOutputVariables().contains(variable);
+                boolean fromRight = right.getOutputVariables().contains(variable);
+                if (fromLeft == fromRight) {
+                    return false;
+                }
+                if (fromLeft) {
+                    leftVariables.add(variable);
+                }
+                else {
+                    rightVariables.add(variable);
+                }
+            }
+
+            List<VariableReferenceExpression> requestedLeftVariables = leftVariables.build();
+            List<VariableReferenceExpression> requestedRightVariables = rightVariables.build();
+            Optional<List<VariableReferenceExpression>> leftJoinKeys = keysForSide(join.getCriteria(), left);
+            Optional<List<VariableReferenceExpression>> rightJoinKeys = keysForSide(join.getCriteria(), right);
+            if (!leftJoinKeys.isPresent() || !rightJoinKeys.isPresent()) {
+                return false;
+            }
+
+            boolean leftRowsAreNotDuplicated = isKnownUnique(right, rightJoinKeys.get(), context);
+            boolean rightRowsAreNotDuplicated = isKnownUnique(left, leftJoinKeys.get(), context);
+            boolean leftVariablesAreUnique = !requestedLeftVariables.isEmpty() && isKnownUnique(left, requestedLeftVariables, context);
+            boolean rightVariablesAreUnique = !requestedRightVariables.isEmpty() && isKnownUnique(right, requestedRightVariables, context);
+            if (requestedRightVariables.isEmpty()) {
+                return leftRowsAreNotDuplicated && leftVariablesAreUnique;
+            }
+            if (requestedLeftVariables.isEmpty()) {
+                return rightRowsAreNotDuplicated && rightVariablesAreUnique;
+            }
+            return (leftRowsAreNotDuplicated && leftVariablesAreUnique) ||
+                    (rightRowsAreNotDuplicated && rightVariablesAreUnique);
+        }
+
         if (node instanceof TableScanNode) {
             TableScanNode scan = (TableScanNode) node;
             LinkedHashSet<ColumnHandle> columns = new LinkedHashSet<>();
@@ -742,11 +901,129 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
             return scan.getTableConstraints().stream()
                     .anyMatch(constraint -> (constraint.isEnabled() || constraint.isRely()) &&
                             (constraint instanceof PrimaryKeyConstraint || constraint instanceof UniqueConstraint) &&
-                            constraint.getColumns().size() == columns.size() &&
-                            constraint.getColumns().containsAll(columns));
+                            columns.containsAll(constraint.getColumns()));
         }
 
         return false;
+    }
+
+    private boolean functionallyDetermines(
+            PlanNode node,
+            Set<VariableReferenceExpression> determinants,
+            Set<VariableReferenceExpression> dependents,
+            Context context)
+    {
+        node = context.getLookup().resolve(node);
+        if (determinants.containsAll(dependents)) {
+            return true;
+        }
+        if (!node.getOutputVariables().containsAll(determinants) ||
+                !node.getOutputVariables().containsAll(dependents)) {
+            return false;
+        }
+
+        if (node instanceof ProjectNode) {
+            ProjectNode project = (ProjectNode) node;
+            Optional<Set<VariableReferenceExpression>> sourceDeterminants = mapVariablesThroughProject(project, determinants);
+            Optional<Set<VariableReferenceExpression>> sourceDependents = mapVariablesThroughProject(project, dependents);
+            return sourceDeterminants.isPresent() &&
+                    sourceDependents.isPresent() &&
+                    functionallyDetermines(project.getSource(), sourceDeterminants.get(), sourceDependents.get(), context);
+        }
+
+        if (node instanceof FilterNode) {
+            return functionallyDetermines(((FilterNode) node).getSource(), determinants, dependents, context);
+        }
+
+        if (node instanceof AggregationNode) {
+            AggregationNode aggregation = (AggregationNode) node;
+            if (aggregation.getGroupingSetCount() != 1 ||
+                    aggregation.getGroupIdVariable().isPresent()) {
+                return false;
+            }
+
+            Set<VariableReferenceExpression> groupingKeys = ImmutableSet.copyOf(aggregation.getGroupingKeys());
+            if (determinants.containsAll(groupingKeys)) {
+                return true;
+            }
+            if (!groupingKeys.containsAll(determinants) ||
+                    !groupingKeys.containsAll(dependents)) {
+                return false;
+            }
+            return functionallyDetermines(aggregation.getSource(), determinants, dependents, context);
+        }
+
+        if (node instanceof JoinNode) {
+            JoinNode join = (JoinNode) node;
+            if (!isPlainInnerJoin(join)) {
+                return false;
+            }
+
+            PlanNode left = context.getLookup().resolve(join.getLeft());
+            PlanNode right = context.getLookup().resolve(join.getRight());
+            Set<VariableReferenceExpression> leftDependents = variablesFromSide(dependents, left);
+            Set<VariableReferenceExpression> rightDependents = variablesFromSide(dependents, right);
+            if (leftDependents.size() + rightDependents.size() != dependents.size()) {
+                return false;
+            }
+
+            Set<VariableReferenceExpression> leftDeterminants = variablesFromSide(determinants, left);
+            Set<VariableReferenceExpression> rightDeterminants = variablesFromSide(determinants, right);
+            if (leftDeterminants.size() + rightDeterminants.size() != determinants.size()) {
+                return false;
+            }
+
+            boolean leftDetermined = leftDependents.isEmpty() ||
+                    (!leftDeterminants.isEmpty() && functionallyDetermines(left, leftDeterminants, leftDependents, context));
+            boolean rightDetermined = rightDependents.isEmpty() ||
+                    (!rightDeterminants.isEmpty() && functionallyDetermines(right, rightDeterminants, rightDependents, context));
+            return leftDetermined && rightDetermined;
+        }
+
+        if (node instanceof TableScanNode) {
+            TableScanNode scan = (TableScanNode) node;
+            LinkedHashSet<ColumnHandle> determinantColumns = new LinkedHashSet<>();
+            for (VariableReferenceExpression variable : determinants) {
+                ColumnHandle column = scan.getAssignments().get(variable);
+                if (column == null) {
+                    return false;
+                }
+                determinantColumns.add(column);
+            }
+
+            return scan.getTableConstraints().stream()
+                    .anyMatch(constraint -> (constraint.isEnabled() || constraint.isRely()) &&
+                            (constraint instanceof PrimaryKeyConstraint || constraint instanceof UniqueConstraint) &&
+                            determinantColumns.containsAll(constraint.getColumns()));
+        }
+
+        return false;
+    }
+
+    private Optional<Set<VariableReferenceExpression>> mapVariablesThroughProject(
+            ProjectNode project,
+            Set<VariableReferenceExpression> variables)
+    {
+        ImmutableSet.Builder<VariableReferenceExpression> mapped = ImmutableSet.builder();
+        for (VariableReferenceExpression variable : variables) {
+            RowExpression assignment = project.getAssignments().get(variable);
+            if (!(assignment instanceof VariableReferenceExpression)) {
+                return Optional.empty();
+            }
+            mapped.add((VariableReferenceExpression) assignment);
+        }
+        return Optional.of(mapped.build());
+    }
+
+    private Set<VariableReferenceExpression> variablesFromSide(Set<VariableReferenceExpression> variables, PlanNode side)
+    {
+        ImmutableSet.Builder<VariableReferenceExpression> result = ImmutableSet.builder();
+        for (VariableReferenceExpression variable : variables) {
+            if (side.getOutputVariables().contains(variable)) {
+                result.add(variable);
+            }
+        }
+        return result.build();
     }
 
     private Optional<List<VariableReferenceExpression>> keysForSide(List<EquiJoinClause> criteria, PlanNode side)
