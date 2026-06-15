@@ -505,8 +505,8 @@ public abstract class BasePlanFragmenter
                 Optional.empty());
 
         checkArgument(
-                !exchange.getPartitioningScheme().isReplicateNullsAndAny(),
-                "materialized remote exchange is not supported when replicateNullsAndAny is needed");
+                !(exchange.getPartitioningScheme().isReplicateNullsAndAny() || exchange.getPartitioningScheme().isReplicateNulls()),
+                "materialized remote exchange is not supported when replicated nulls are needed");
         TableFinishNode write = createTemporaryTableWriteWithExchanges(
                 metadata,
                 session,

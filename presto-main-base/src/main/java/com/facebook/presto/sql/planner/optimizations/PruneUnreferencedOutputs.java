@@ -62,6 +62,7 @@ import com.facebook.presto.sql.planner.plan.CallDistributedProcedureNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.MergeProcessorNode;
 import com.facebook.presto.sql.planner.plan.MergeWriterNode;
@@ -175,6 +176,7 @@ public class PruneUnreferencedOutputs
                     newOutputVariables,
                     node.getPartitioningScheme().getHashColumn(),
                     node.getPartitioningScheme().isReplicateNullsAndAny(),
+                    node.getPartitioningScheme().isReplicateNulls(),
                     node.getPartitioningScheme().isScaleWriters(),
                     node.getPartitioningScheme().getEncoding(),
                     node.getPartitioningScheme().getBucketToPartition());
@@ -684,6 +686,32 @@ public class PruneUnreferencedOutputs
 
             PlanNode source = context.rewrite(node.getSource(), expectedInputs.build());
             return new GroupIdNode(node.getSourceLocation(), node.getId(), node.getStatsEquivalentPlanNode(), source, newGroupingSets.build(), newGroupingMapping, newAggregationArguments, node.getGroupIdVariable());
+        }
+
+        @Override
+        public PlanNode visitGroupedScalarFilter(GroupedScalarFilterNode node, RewriteContext<Set<VariableReferenceExpression>> context)
+        {
+            Set<VariableReferenceExpression> expectedInputs = ImmutableSet.<VariableReferenceExpression>builder()
+                    .addAll(context.get())
+                    .add(node.getGroupIdVariable())
+                    .add(node.getScalarValueVariable())
+                    .addAll(VariablesExtractor.extractUnique(node.getPredicate()).stream()
+                            .filter(variable -> !variable.equals(node.getScalarVariable()))
+                            .collect(toImmutableSet()))
+                    .build();
+
+            PlanNode source = context.rewrite(node.getSource(), expectedInputs);
+            return new GroupedScalarFilterNode(
+                    node.getSourceLocation(),
+                    node.getId(),
+                    node.getStatsEquivalentPlanNode(),
+                    source,
+                    node.getGroupIdVariable(),
+                    node.getGroupedGroupId(),
+                    node.getScalarGroupId(),
+                    node.getScalarValueVariable(),
+                    node.getScalarVariable(),
+                    node.getPredicate());
         }
 
         @Override

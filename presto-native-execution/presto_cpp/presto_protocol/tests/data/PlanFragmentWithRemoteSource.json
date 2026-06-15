@@ -45,6 +45,7 @@
       {"@type": "variable", "name": "col", "type": "bigint"}
     ],
     "replicateNullsAndAny": false,
+    "replicateNulls": false,
     "scaleWriters": false,
     "encoding": "COLUMNAR",
     "bucketToPartition": [0]

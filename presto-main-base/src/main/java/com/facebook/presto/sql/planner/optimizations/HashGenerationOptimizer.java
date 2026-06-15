@@ -596,6 +596,7 @@ public class HashGenerationOptimizer
                             .build(),
                     partitionVariables.map(newHashVariables::get),
                     partitioningScheme.isReplicateNullsAndAny(),
+                    partitioningScheme.isReplicateNulls(),
                     partitioningScheme.isScaleWriters(),
                     partitioningScheme.getEncoding(),
                     partitioningScheme.getBucketToPartition());

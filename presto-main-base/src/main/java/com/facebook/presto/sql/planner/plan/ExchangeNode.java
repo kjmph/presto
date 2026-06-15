@@ -145,7 +145,7 @@ public class ExchangeNode
                 "local exchanges do not support constant partition function arguments");
         checkArgument(scope == REMOTE_STREAMING || partitioningScheme.getEncoding() == COLUMNAR, "Only REMOTE_STREAMING can be ROW_WISE: %s", partitioningScheme.getEncoding());
 
-        checkArgument(!scope.isRemote() || type == REPARTITION || !partitioningScheme.isReplicateNullsAndAny(), "Only REPARTITION can replicate remotely");
+        checkArgument(!scope.isRemote() || type == REPARTITION || !(partitioningScheme.isReplicateNullsAndAny() || partitioningScheme.isReplicateNulls()), "Only REPARTITION can replicate remotely");
         checkArgument(scope != REMOTE_MATERIALIZED || type == REPARTITION, "Only REPARTITION can be REMOTE_MATERIALIZED: %s", type);
 
         orderingScheme.ifPresent(ordering -> {

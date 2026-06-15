@@ -66,6 +66,7 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.MergeProcessorNode;
@@ -280,6 +281,26 @@ public final class ValidateDependenciesChecker
             source.accept(this, boundVariables); // visit child
 
             checkDependencies(source.getOutputVariables(), node.getInputVariables(), "Invalid node. Grouping symbols (%s) not in source plan output (%s)", node.getInputVariables(), source.getOutputVariables());
+
+            return null;
+        }
+
+        @Override
+        public Void visitGroupedScalarFilter(GroupedScalarFilterNode node, Set<VariableReferenceExpression> boundVariables)
+        {
+            PlanNode source = node.getSource();
+            source.accept(this, boundVariables);
+
+            Set<VariableReferenceExpression> inputs = createInputs(source, boundVariables);
+            checkDependencies(inputs, node.getOutputVariables(), "Invalid node. Output symbols (%s) not in source plan output (%s)", node.getOutputVariables(), source.getOutputVariables());
+            checkDependencies(inputs, ImmutableSet.of(node.getGroupIdVariable(), node.getScalarValueVariable()), "Invalid node. Grouped scalar filter symbols (%s) not in source plan output (%s)", ImmutableSet.of(node.getGroupIdVariable(), node.getScalarValueVariable()), source.getOutputVariables());
+
+            Set<VariableReferenceExpression> predicateInputs = ImmutableSet.<VariableReferenceExpression>builder()
+                    .addAll(inputs)
+                    .add(node.getScalarVariable())
+                    .build();
+            Set<VariableReferenceExpression> dependencies = VariablesExtractor.extractUnique(node.getPredicate());
+            checkDependencies(predicateInputs, dependencies, "Invalid node. Grouped scalar filter predicate dependencies (%s) not in source plan output plus scalar variable (%s)", dependencies, predicateInputs);
 
             return null;
         }
