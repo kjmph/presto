@@ -75,6 +75,11 @@ class VeloxQueryPlanConverterBase {
       const std::shared_ptr<protocol::TableWriteInfo>& tableWriteInfo,
       const protocol::TaskId& taskId);
 
+  velox::core::PlanNodePtr toVeloxQueryPlan(
+      const std::shared_ptr<const protocol::GroupedScalarFilterNode>& node,
+      const std::shared_ptr<protocol::TableWriteInfo>& tableWriteInfo,
+      const protocol::TaskId& taskId);
+
   std::shared_ptr<const velox::core::ProjectNode> toVeloxQueryPlan(
       const std::shared_ptr<const protocol::ProjectNode>& node,
       const std::shared_ptr<protocol::TableWriteInfo>& tableWriteInfo,

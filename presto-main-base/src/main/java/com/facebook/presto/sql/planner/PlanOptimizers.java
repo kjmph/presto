@@ -169,6 +169,7 @@ import com.facebook.presto.sql.planner.iterative.rule.SimplifyRowExpressions;
 import com.facebook.presto.sql.planner.iterative.rule.SimplifySortWithConstantInput;
 import com.facebook.presto.sql.planner.iterative.rule.SimplifyTopNWithConstantInput;
 import com.facebook.presto.sql.planner.iterative.rule.SingleDistinctAggregationToGroupBy;
+import com.facebook.presto.sql.planner.iterative.rule.SplitGroupedScalarFilterAggregation;
 import com.facebook.presto.sql.planner.iterative.rule.TransformCorrelatedInPredicateToJoin;
 import com.facebook.presto.sql.planner.iterative.rule.TransformCorrelatedLateralJoinToJoin;
 import com.facebook.presto.sql.planner.iterative.rule.TransformCorrelatedScalarAggregationToGroupedJoin;
@@ -182,6 +183,7 @@ import com.facebook.presto.sql.planner.iterative.rule.TransformDuplicateFactSumT
 import com.facebook.presto.sql.planner.iterative.rule.TransformExistsApplyToLateralNode;
 import com.facebook.presto.sql.planner.iterative.rule.TransformMaxAggregationSelfJoinToTopNRank;
 import com.facebook.presto.sql.planner.iterative.rule.TransformMinAggregationJoinToWindow;
+import com.facebook.presto.sql.planner.iterative.rule.TransformRepeatedScalarSumToGroupedScalarFilter;
 import com.facebook.presto.sql.planner.iterative.rule.TransformTableFunctionProcessorToTableScan;
 import com.facebook.presto.sql.planner.iterative.rule.TransformTableFunctionToTableFunctionProcessor;
 import com.facebook.presto.sql.planner.iterative.rule.TransformUncorrelatedInPredicateSubqueryToDistinctInnerJoin;
@@ -778,6 +780,13 @@ public class PlanOptimizers
                         statsCalculator,
                         estimatedExchangesCostCalculator,
                         Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
+                        ImmutableSet.of(new TransformRepeatedScalarSumToGroupedScalarFilter(metadata.getFunctionAndTypeManager()))),
+                new IterativeOptimizer(
+                        metadata,
+                        ruleStats,
+                        statsCalculator,
+                        estimatedExchangesCostCalculator,
+                        Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
                         ImmutableSet.of(
                                 new RemoveRedundantDistinct(),
                                 new RemoveRedundantTopN(),
@@ -797,6 +806,13 @@ public class PlanOptimizers
                                 new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager(), taskCountEstimator),
                                 new PreAggregateCountThroughOuterJoin(metadata.getFunctionAndTypeManager()),
                                 new PushAggregationThroughOuterJoin(metadata.getFunctionAndTypeManager()))),
+                new IterativeOptimizer(
+                        metadata,
+                        ruleStats,
+                        statsCalculator,
+                        estimatedExchangesCostCalculator,
+                        Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
+                        ImmutableSet.of(new TransformRepeatedScalarSumToGroupedScalarFilter(metadata.getFunctionAndTypeManager()))),
                 inlineProjections,
                 simplifyRowExpressionOptimizer, // Re-run the SimplifyExpressions to simplify any recomposed expressions from other optimizations
                 projectionPushDown,
@@ -1010,6 +1026,14 @@ public class PlanOptimizers
                 statsCalculator,
                 estimatedExchangesCostCalculator,
                 Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
+                ImmutableSet.of(new TransformRepeatedScalarSumToGroupedScalarFilter(metadata.getFunctionAndTypeManager()))));
+
+        builder.add(new IterativeOptimizer(
+                metadata,
+                ruleStats,
+                statsCalculator,
+                estimatedExchangesCostCalculator,
+                Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
                 ImmutableSet.of(
                         new TransformDistinctInnerJoinToLeftEarlyOutJoin(),
                         new TransformDistinctInnerJoinToRightEarlyOutJoin(),
@@ -1030,6 +1054,14 @@ public class PlanOptimizers
                         new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager(), taskCountEstimator),
                         new PreAggregateCountThroughOuterJoin(metadata.getFunctionAndTypeManager()),
                         new PushAggregationThroughOuterJoin(metadata.getFunctionAndTypeManager()))));
+
+        builder.add(new IterativeOptimizer(
+                metadata,
+                ruleStats,
+                statsCalculator,
+                estimatedExchangesCostCalculator,
+                Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
+                ImmutableSet.of(new TransformRepeatedScalarSumToGroupedScalarFilter(metadata.getFunctionAndTypeManager()))));
 
         builder.add(new IterativeOptimizer(
                 metadata,
@@ -1155,6 +1187,7 @@ public class PlanOptimizers
                         statsCalculator,
                         costCalculator,
                         ImmutableSet.of(
+                                new SplitGroupedScalarFilterAggregation(metadata.getFunctionAndTypeManager()),
                                 new PushPartialAggregationThroughJoin(),
                                 new PushPartialAggregationThroughExchange(metadata.getFunctionAndTypeManager(), featuresConfig.isNativeExecutionEnabled()))),
                 // MergePartialAggregationsWithFilter should immediately follow PushPartialAggregationThroughExchange

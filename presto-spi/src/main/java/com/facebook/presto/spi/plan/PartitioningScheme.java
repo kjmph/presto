@@ -37,6 +37,7 @@ public class PartitioningScheme
     private final List<VariableReferenceExpression> outputLayout;
     private final Optional<VariableReferenceExpression> hashColumn;
     private final boolean replicateNullsAndAny;
+    private final boolean replicateNulls;
     private final boolean scaleWriters;
     private final ExchangeEncoding encoding;
     private final Optional<int[]> bucketToPartition;
@@ -47,6 +48,7 @@ public class PartitioningScheme
                 partitioning,
                 outputLayout,
                 Optional.empty(),
+                false,
                 false,
                 scaleWriters,
                 COLUMNAR,
@@ -61,6 +63,7 @@ public class PartitioningScheme
                 Optional.empty(),
                 false,
                 false,
+                false,
                 COLUMNAR,
                 Optional.empty());
     }
@@ -73,8 +76,29 @@ public class PartitioningScheme
                 hashColumn,
                 false,
                 false,
+                false,
                 COLUMNAR,
                 Optional.empty());
+    }
+
+    public PartitioningScheme(
+            Partitioning partitioning,
+            List<VariableReferenceExpression> outputLayout,
+            Optional<VariableReferenceExpression> hashColumn,
+            boolean replicateNullsAndAny,
+            boolean scaleWriters,
+            ExchangeEncoding encoding,
+            Optional<int[]> bucketToPartition)
+    {
+        this(
+                partitioning,
+                outputLayout,
+                hashColumn,
+                replicateNullsAndAny,
+                false,
+                scaleWriters,
+                encoding,
+                bucketToPartition);
     }
 
     @JsonCreator
@@ -83,6 +107,7 @@ public class PartitioningScheme
             @JsonProperty("outputLayout") List<VariableReferenceExpression> outputLayout,
             @JsonProperty("hashColumn") Optional<VariableReferenceExpression> hashColumn,
             @JsonProperty("replicateNullsAndAny") boolean replicateNullsAndAny,
+            @JsonProperty("replicateNulls") boolean replicateNulls,
             @JsonProperty("scaleWriters") boolean scaleWriters,
             @JsonProperty("encoding") ExchangeEncoding encoding,
             @JsonProperty("bucketToPartition") Optional<int[]> bucketToPartition)
@@ -99,8 +124,10 @@ public class PartitioningScheme
         hashColumn.ifPresent(column -> checkArgument(outputLayout.contains(column),
                 format("Output layout (%s) don't include hash column (%s)", outputLayout, column)));
 
-        checkArgument(!replicateNullsAndAny || columns.size() <= 1, "Must have at most one partitioning column when nullPartition is REPLICATE.");
+        checkArgument(!(replicateNullsAndAny && replicateNulls), "Cannot enable both replicateNullsAndAny and replicateNulls.");
+        checkArgument(!(replicateNullsAndAny || replicateNulls) || columns.size() <= 1, "Must have at most one partitioning column when nullPartition is REPLICATE.");
         this.replicateNullsAndAny = replicateNullsAndAny;
+        this.replicateNulls = replicateNulls;
         this.scaleWriters = scaleWriters;
         this.encoding = requireNonNull(encoding, "encoding is null");
         this.bucketToPartition = requireNonNull(bucketToPartition, "bucketToPartition is null");
@@ -131,6 +158,12 @@ public class PartitioningScheme
     }
 
     @JsonProperty
+    public boolean isReplicateNulls()
+    {
+        return replicateNulls;
+    }
+
+    @JsonProperty
     public ExchangeEncoding getEncoding()
     {
         return encoding;
@@ -155,6 +188,7 @@ public class PartitioningScheme
                 outputLayout,
                 hashColumn,
                 replicateNullsAndAny,
+                replicateNulls,
                 scaleWriters,
                 encoding,
                 bucketToPartition);
@@ -167,6 +201,7 @@ public class PartitioningScheme
                 outputLayout,
                 hashColumn,
                 replicateNullsAndAny,
+                replicateNulls,
                 scaleWriters,
                 ROW_WISE,
                 bucketToPartition);
@@ -190,6 +225,7 @@ public class PartitioningScheme
         return Objects.equals(partitioning, that.partitioning) &&
                 Objects.equals(outputLayout, that.outputLayout) &&
                 replicateNullsAndAny == that.replicateNullsAndAny &&
+                replicateNulls == that.replicateNulls &&
                 scaleWriters == that.scaleWriters &&
                 encoding == that.encoding &&
                 Objects.equals(bucketToPartition, that.bucketToPartition);
@@ -198,7 +234,7 @@ public class PartitioningScheme
     @Override
     public int hashCode()
     {
-        return Objects.hash(partitioning, outputLayout, replicateNullsAndAny, encoding, scaleWriters, bucketToPartition);
+        return Objects.hash(partitioning, outputLayout, replicateNullsAndAny, replicateNulls, encoding, scaleWriters, bucketToPartition);
     }
 
     @Override
@@ -208,6 +244,7 @@ public class PartitioningScheme
                 ", outputLayout=" + outputLayout +
                 ", hashChannel=" + hashColumn +
                 ", replicateNullsAndAny=" + replicateNullsAndAny +
+                ", replicateNulls=" + replicateNulls +
                 ", scaleWriters=" + scaleWriters +
                 ", encoding=" + encoding +
                 ", bucketToPartition=" + bucketToPartition +

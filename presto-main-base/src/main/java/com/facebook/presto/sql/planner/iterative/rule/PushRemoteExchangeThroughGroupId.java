@@ -152,6 +152,7 @@ public final class PushRemoteExchangeThroughGroupId
                                 outputLayout,
                                 partitioningScheme.getHashColumn(),
                                 partitioningScheme.isReplicateNullsAndAny(),
+                                partitioningScheme.isReplicateNulls(),
                                 partitioningScheme.isScaleWriters(),
                                 partitioningScheme.getEncoding(),
                                 partitioningScheme.getBucketToPartition()),

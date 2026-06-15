@@ -66,6 +66,7 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.MergeProcessorNode;
@@ -249,6 +250,12 @@ public class PropertyDerivations
         public ActualProperties visitMarkDistinct(MarkDistinctNode node, List<ActualProperties> inputProperties)
         {
             return Iterables.getOnlyElement(inputProperties);
+        }
+
+        @Override
+        public ActualProperties visitGroupedScalarFilter(GroupedScalarFilterNode node, List<ActualProperties> inputProperties)
+        {
+            return Iterables.getOnlyElement(inputProperties).withReplicatedNulls(false);
         }
 
         @Override
@@ -774,7 +781,7 @@ public class PropertyDerivations
                         globalPartitioning = partitionedOn(
                                 node.getPartitioningScheme().getPartitioning(),
                                 Optional.of(node.getPartitioningScheme().getPartitioning()))
-                                .withReplicatedNulls(node.getPartitioningScheme().isReplicateNullsAndAny());
+                                .withReplicatedNulls(node.getPartitioningScheme().isReplicateNullsAndAny() || node.getPartitioningScheme().isReplicateNulls());
                     }
                     return ActualProperties.builder()
                             .global(globalPartitioning)

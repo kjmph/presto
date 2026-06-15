@@ -62,6 +62,7 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.MergeProcessorNode;
@@ -533,6 +534,21 @@ public final class GraphvizPrinter
         {
             String expression = formatter.apply(node.getPredicate());
             printNode(node, "Filter", expression, NODE_COLORS.get(NodeType.FILTER));
+            return node.getSource().accept(this, context);
+        }
+
+        @Override
+        public Void visitGroupedScalarFilter(GroupedScalarFilterNode node, Void context)
+        {
+            String details = format(
+                    "groupId: %s, grouped: %s, scalar: %s, %s := %s, predicate: %s",
+                    node.getGroupIdVariable(),
+                    node.getGroupedGroupId(),
+                    node.getScalarGroupId(),
+                    node.getScalarVariable(),
+                    node.getScalarValueVariable(),
+                    formatter.apply(node.getPredicate()));
+            printNode(node, "GroupedScalarFilter", details, NODE_COLORS.get(NodeType.FILTER));
             return node.getSource().accept(this, context);
         }
 

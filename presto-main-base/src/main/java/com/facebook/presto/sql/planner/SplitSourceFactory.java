@@ -57,6 +57,7 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.MergeProcessorNode;
 import com.facebook.presto.sql.planner.plan.MergeWriterNode;
@@ -280,6 +281,12 @@ public class SplitSourceFactory
 
         @Override
         public Map<PlanNodeId, SplitSource> visitFilter(FilterNode node, Context context)
+        {
+            return node.getSource().accept(this, context);
+        }
+
+        @Override
+        public Map<PlanNodeId, SplitSource> visitGroupedScalarFilter(GroupedScalarFilterNode node, Context context)
         {
             return node.getSource().accept(this, context);
         }

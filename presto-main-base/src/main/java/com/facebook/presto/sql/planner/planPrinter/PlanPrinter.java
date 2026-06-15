@@ -97,6 +97,7 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.MergeProcessorNode;
@@ -448,8 +449,15 @@ public class PlanPrinter
 
         builder.append(indentString(1));
         boolean replicateNullsAndAny = partitioningScheme.isReplicateNullsAndAny();
+        boolean replicateNulls = partitioningScheme.isReplicateNulls();
         if (replicateNullsAndAny) {
             builder.append(format("Output partitioning: %s (replicate nulls and any) [%s]%s%n",
+                    partitioningScheme.getPartitioning().getHandle(),
+                    Joiner.on(", ").join(partitioningScheme.getPartitioning().getArguments()),
+                    formatHash(partitioningScheme.getHashColumn())));
+        }
+        else if (replicateNulls) {
+            builder.append(format("Output partitioning: %s (replicate nulls) [%s]%s%n",
                     partitioningScheme.getPartitioning().getHandle(),
                     Joiner.on(", ").join(partitioningScheme.getPartitioning().getArguments()),
                     formatHash(partitioningScheme.getHashColumn())));
@@ -773,6 +781,24 @@ public class PlanPrinter
             for (Map.Entry<VariableReferenceExpression, VariableReferenceExpression> mapping : node.getGroupingColumns().entrySet()) {
                 nodeOutput.appendDetailsLine("%s := %s%s", mapping.getKey(), mapping.getValue(), formatSourceLocation(mapping.getValue().getSourceLocation(), mapping.getKey().getSourceLocation()));
             }
+
+            return processChildren(node, context);
+        }
+
+        @Override
+        public Void visitGroupedScalarFilter(GroupedScalarFilterNode node, Void context)
+        {
+            addNode(
+                    node,
+                    "GroupedScalarFilter",
+                    format(
+                            "[groupId=%s groupedGroupId=%s scalarGroupId=%s scalarValue=%s scalarVariable=%s filter=%s]",
+                            node.getGroupIdVariable(),
+                            node.getGroupedGroupId(),
+                            node.getScalarGroupId(),
+                            node.getScalarValueVariable(),
+                            node.getScalarVariable(),
+                            formatter.apply(node.getPredicate())));
 
             return processChildren(node, context);
         }
@@ -1314,7 +1340,7 @@ public class PlanPrinter
                         "LocalExchange",
                         format("[%s%s]%s (%s)",
                                 node.getPartitioningScheme().getPartitioning().getHandle(),
-                                node.getPartitioningScheme().isReplicateNullsAndAny() ? " - REPLICATE NULLS AND ANY" : "",
+                                formatReplicatedNulls(node.getPartitioningScheme()),
                                 formatHash(node.getPartitioningScheme().getHashColumn()),
                                 Joiner.on(", ").join(node.getPartitioningScheme().getPartitioning().getArguments())));
             }
@@ -1324,7 +1350,7 @@ public class PlanPrinter
                         format("[%s - %s%s]%s",
                                 node.getType(),
                                 node.getPartitioningScheme().getEncoding(),
-                                node.getPartitioningScheme().isReplicateNullsAndAny() ? " - REPLICATE NULLS AND ANY" : "",
+                                formatReplicatedNulls(node.getPartitioningScheme()),
                                 formatHash(node.getPartitioningScheme().getHashColumn())));
             }
             return processChildren(node, context);
@@ -1788,6 +1814,17 @@ public class PlanPrinter
         }
 
         return "[" + Joiner.on(", ").join(variables) + "]";
+    }
+
+    private static String formatReplicatedNulls(PartitioningScheme partitioningScheme)
+    {
+        if (partitioningScheme.isReplicateNullsAndAny()) {
+            return " - REPLICATE NULLS AND ANY";
+        }
+        if (partitioningScheme.isReplicateNulls()) {
+            return " - REPLICATE NULLS";
+        }
+        return "";
     }
 
     private static String formatOutputs(Iterable<VariableReferenceExpression> outputs)
