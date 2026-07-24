@@ -18,6 +18,7 @@ import com.facebook.presto.cost.StatsProvider;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.SemiJoinNode;
+import com.facebook.presto.sql.tree.Expression;
 
 import java.util.Optional;
 
@@ -35,13 +36,20 @@ final class SemiJoinMatcher
     private final String filteringSymbolAlias;
     private final String outputAlias;
     private final Optional<SemiJoinNode.DistributionType> distributionType;
+    private final Optional<Expression> filter;
 
-    SemiJoinMatcher(String sourceSymbolAlias, String filteringSymbolAlias, String outputAlias, Optional<SemiJoinNode.DistributionType> distributionType)
+    SemiJoinMatcher(
+            String sourceSymbolAlias,
+            String filteringSymbolAlias,
+            String outputAlias,
+            Optional<SemiJoinNode.DistributionType> distributionType,
+            Optional<Expression> filter)
     {
         this.sourceSymbolAlias = requireNonNull(sourceSymbolAlias, "sourceSymbolAlias is null");
         this.filteringSymbolAlias = requireNonNull(filteringSymbolAlias, "filteringSymbolAlias is null");
         this.outputAlias = requireNonNull(outputAlias, "outputAlias is null");
         this.distributionType = requireNonNull(distributionType, "distributionType is null");
+        this.filter = requireNonNull(filter, "filter is null");
     }
 
     @Override
@@ -65,6 +73,16 @@ final class SemiJoinMatcher
             return NO_MATCH;
         }
 
+        if (filter.isPresent()) {
+            if (!semiJoinNode.getFilter().isPresent() ||
+                    !new RowExpressionVerifier(symbolAliases, metadata, session).process(filter.get(), semiJoinNode.getFilter().get())) {
+                return NO_MATCH;
+            }
+        }
+        else if (semiJoinNode.getFilter().isPresent()) {
+            return NO_MATCH;
+        }
+
         return match(outputAlias, createSymbolReference(semiJoinNode.getSemiJoinOutput()));
     }
 
@@ -76,6 +94,7 @@ final class SemiJoinMatcher
                 .add("sourceSymbolAlias", sourceSymbolAlias)
                 .add("outputAlias", outputAlias)
                 .add("distributionType", distributionType)
+                .add("filter", filter)
                 .toString();
     }
 }

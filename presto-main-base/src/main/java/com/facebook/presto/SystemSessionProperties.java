@@ -181,6 +181,8 @@ public final class SystemSessionProperties
     public static final String ENABLE_INTERMEDIATE_AGGREGATIONS = "enable_intermediate_aggregations";
     public static final String PARALLELIZE_CHAINED_AGGREGATION = "parallelize_chained_aggregation";
     public static final String PUSH_AGGREGATION_THROUGH_JOIN = "push_aggregation_through_join";
+    public static final String REWRITE_GROUPED_NOT_EQUAL_EXISTS_TO_FILTERED_SEMI_JOIN = "rewrite_grouped_not_equal_exists_to_filtered_semi_join";
+    public static final String REWRITE_REPEATED_SCALAR_SUM_TO_GROUPED_SCALAR_FILTER = "rewrite_repeated_scalar_sum_to_grouped_scalar_filter";
     public static final String PUSH_SEMI_JOIN_THROUGH_UNION = "push_semi_join_through_union";
     public static final String PUSH_AGGREGATION_THROUGH_DISJOINT_UNION = "push_aggregation_through_disjoint_union";
     public static final String OPTIMIZE_CASCADING_FILTERS_AND_PROJECTIONS = "optimize_cascading_filters_and_projections";
@@ -989,6 +991,16 @@ public final class SystemSessionProperties
                         PUSH_AGGREGATION_THROUGH_JOIN,
                         "Allow pushing aggregations below joins",
                         featuresConfig.isPushAggregationThroughJoin(),
+                        false),
+                booleanProperty(
+                        REWRITE_GROUPED_NOT_EQUAL_EXISTS_TO_FILTERED_SEMI_JOIN,
+                        "Rewrite grouped not-equal EXISTS to a filtered semi-join for native execution",
+                        featuresConfig.isRewriteGroupedNotEqualExistsToFilteredSemiJoin(),
+                        false),
+                booleanProperty(
+                        REWRITE_REPEATED_SCALAR_SUM_TO_GROUPED_SCALAR_FILTER,
+                        "Rewrite repeated scalar SUM to a grouped scalar filter for native execution",
+                        featuresConfig.isRewriteRepeatedScalarSumToGroupedScalarFilter(),
                         false),
                 booleanProperty(
                         PUSH_SEMI_JOIN_THROUGH_UNION,
@@ -2954,6 +2966,16 @@ public final class SystemSessionProperties
     public static boolean shouldPushAggregationThroughJoin(Session session)
     {
         return session.getSystemProperty(PUSH_AGGREGATION_THROUGH_JOIN, Boolean.class);
+    }
+
+    public static boolean shouldRewriteGroupedNotEqualExistsToFilteredSemiJoin(Session session)
+    {
+        return session.getSystemProperty(REWRITE_GROUPED_NOT_EQUAL_EXISTS_TO_FILTERED_SEMI_JOIN, Boolean.class);
+    }
+
+    public static boolean shouldRewriteRepeatedScalarSumToGroupedScalarFilter(Session session)
+    {
+        return session.getSystemProperty(REWRITE_REPEATED_SCALAR_SUM_TO_GROUPED_SCALAR_FILTER, Boolean.class);
     }
 
     public static boolean isPushSemiJoinThroughUnion(Session session)

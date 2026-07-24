@@ -160,6 +160,8 @@ public class FeaturesConfig
     private double defaultJoinSelectivityCoefficient;
     private double defaultWriterReplicationCoefficient = 3;
     private boolean pushAggregationThroughJoin = true;
+    private boolean rewriteGroupedNotEqualExistsToFilteredSemiJoin;
+    private boolean rewriteRepeatedScalarSumToGroupedScalarFilter;
     private boolean pushPartialAggregationThroughJoin;
     private boolean pushSemiJoinThroughUnion;
     private boolean pushAggregationThroughDisjointUnion;
@@ -1841,6 +1843,32 @@ public class FeaturesConfig
     public FeaturesConfig setPushAggregationThroughJoin(boolean value)
     {
         this.pushAggregationThroughJoin = value;
+        return this;
+    }
+
+    public boolean isRewriteGroupedNotEqualExistsToFilteredSemiJoin()
+    {
+        return rewriteGroupedNotEqualExistsToFilteredSemiJoin;
+    }
+
+    @Config("optimizer.rewrite-grouped-not-equal-exists-to-filtered-semi-join")
+    @ConfigDescription("Rewrite grouped not-equal EXISTS to a filtered semi-join for native execution")
+    public FeaturesConfig setRewriteGroupedNotEqualExistsToFilteredSemiJoin(boolean value)
+    {
+        this.rewriteGroupedNotEqualExistsToFilteredSemiJoin = value;
+        return this;
+    }
+
+    public boolean isRewriteRepeatedScalarSumToGroupedScalarFilter()
+    {
+        return rewriteRepeatedScalarSumToGroupedScalarFilter;
+    }
+
+    @Config("optimizer.rewrite-repeated-scalar-sum-to-grouped-scalar-filter")
+    @ConfigDescription("Rewrite repeated scalar SUM to a grouped scalar filter for native execution")
+    public FeaturesConfig setRewriteRepeatedScalarSumToGroupedScalarFilter(boolean value)
+    {
+        this.rewriteRepeatedScalarSumToGroupedScalarFilter = value;
         return this;
     }
 

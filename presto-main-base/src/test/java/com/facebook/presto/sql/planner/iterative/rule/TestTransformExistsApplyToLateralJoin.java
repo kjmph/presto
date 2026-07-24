@@ -16,11 +16,11 @@ package com.facebook.presto.sql.planner.iterative.rule;
 import com.facebook.presto.common.function.OperatorType;
 import com.facebook.presto.spi.plan.Assignments;
 import com.facebook.presto.spi.plan.FilterNode;
-import com.facebook.presto.spi.plan.ProjectNode;
-import com.facebook.presto.spi.plan.SemiJoinNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.relation.ExistsExpression;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
+import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
 import com.facebook.presto.sql.relational.FunctionResolution;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -29,15 +29,22 @@ import org.testng.annotations.Test;
 import java.util.Optional;
 
 import static com.facebook.presto.SystemSessionProperties.NATIVE_EXECUTION_ENABLED;
+import static com.facebook.presto.SystemSessionProperties.REWRITE_GROUPED_NOT_EQUAL_EXISTS_TO_FILTERED_SEMI_JOIN;
 import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.expressions.LogicalRowExpressions.TRUE_CONSTANT;
 import static com.facebook.presto.expressions.LogicalRowExpressions.and;
+import static com.facebook.presto.spi.plan.AggregationNode.Step.SINGLE;
+import static com.facebook.presto.spi.plan.JoinType.LEFT;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.aggregation;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.equiJoinClause;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.functionCall;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.join;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.lateral;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.limit;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.node;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.project;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.semiJoin;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.singleGroupingSet;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
 import static com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder.assignment;
 import static com.facebook.presto.sql.relational.Expressions.comparisonExpression;
@@ -113,33 +120,83 @@ public class TestTransformExistsApplyToLateralJoin
     @Test
     public void testNativeGroupedNotEqualExistsRewritesToFilteredSemiJoin()
     {
-        FunctionResolution functionResolution = new FunctionResolution(getFunctionManager().getFunctionAndTypeResolver());
         tester().assertThat(new TransformExistsApplyToLateralNode(tester().getMetadata().getFunctionAndTypeManager()))
                 .setSystemProperty(NATIVE_EXECUTION_ENABLED, "true")
-                .on(p ->
-                        p.apply(
-                                assignment(p.variable("b", BOOLEAN), new ExistsExpression(Optional.empty(), TRUE_CONSTANT)),
-                                ImmutableList.of(p.variable("corr"), p.variable("outer_supp")),
-                                p.values(p.variable("corr"), p.variable("outer_supp")),
-                                p.project(Assignments.of(),
-                                        p.filter(
-                                                and(
-                                                        comparisonExpression(
-                                                                functionResolution,
-                                                                OperatorType.EQUAL,
-                                                                p.variable("corr"),
-                                                                p.variable("column")),
-                                                        comparisonExpression(
-                                                                functionResolution,
-                                                                OperatorType.NOT_EQUAL,
-                                                                p.variable("outer_supp"),
-                                                                p.variable("inner_supp"))),
-                                                p.values(p.variable("column"), p.variable("inner_supp"))))))
+                .setSystemProperty(REWRITE_GROUPED_NOT_EQUAL_EXISTS_TO_FILTERED_SEMI_JOIN, "true")
+                .on(this::groupedNotEqualExists)
                 .matches(
-                        node(ProjectNode.class,
-                                node(SemiJoinNode.class,
+                        project(
+                                ImmutableMap.of("b", PlanMatchPattern.expression("COALESCE(exists_marker, false)")),
+                                semiJoin(
+                                        "corr",
+                                        "column",
+                                        "exists_marker",
+                                        "inner_supp <> outer_supp",
                                         values("corr", "outer_supp"),
                                         node(FilterNode.class,
                                                 values("column", "inner_supp")))));
+    }
+
+    @Test
+    public void testNativeGroupedNotEqualExistsUsesGroupedAggregationByDefault()
+    {
+        tester().assertThat(new TransformExistsApplyToLateralNode(tester().getMetadata().getFunctionAndTypeManager()))
+                .setSystemProperty(NATIVE_EXECUTION_ENABLED, "true")
+                .on(this::groupedNotEqualExists)
+                .matches(groupedNotEqualAggregation());
+    }
+
+    @Test
+    public void testFilteredSemiJoinRequiresNativeExecution()
+    {
+        tester().assertThat(new TransformExistsApplyToLateralNode(tester().getMetadata().getFunctionAndTypeManager()))
+                .setSystemProperty(REWRITE_GROUPED_NOT_EQUAL_EXISTS_TO_FILTERED_SEMI_JOIN, "true")
+                .on(this::groupedNotEqualExists)
+                .matches(groupedNotEqualAggregation());
+    }
+
+    private PlanNode groupedNotEqualExists(PlanBuilder p)
+    {
+        FunctionResolution functionResolution = new FunctionResolution(getFunctionManager().getFunctionAndTypeResolver());
+        return p.apply(
+                assignment(p.variable("b", BOOLEAN), new ExistsExpression(Optional.empty(), TRUE_CONSTANT)),
+                ImmutableList.of(p.variable("corr"), p.variable("outer_supp")),
+                p.values(p.variable("corr"), p.variable("outer_supp")),
+                p.project(Assignments.of(),
+                        p.filter(
+                                and(
+                                        comparisonExpression(
+                                                functionResolution,
+                                                OperatorType.EQUAL,
+                                                p.variable("corr"),
+                                                p.variable("column")),
+                                        comparisonExpression(
+                                                functionResolution,
+                                                OperatorType.NOT_EQUAL,
+                                                p.variable("outer_supp"),
+                                                p.variable("inner_supp"))),
+                                p.values(p.variable("column"), p.variable("inner_supp")))));
+    }
+
+    private PlanMatchPattern groupedNotEqualAggregation()
+    {
+        return project(
+                ImmutableMap.of(
+                        "b",
+                        PlanMatchPattern.expression("COALESCE((exists_min <> outer_supp) OR (exists_max <> outer_supp), false)")),
+                join(
+                        LEFT,
+                        ImmutableList.of(equiJoinClause("corr", "column")),
+                        values("corr", "outer_supp"),
+                        aggregation(
+                                singleGroupingSet("column"),
+                                ImmutableMap.of(
+                                        Optional.of("exists_min"), functionCall("min", ImmutableList.of("inner_supp")),
+                                        Optional.of("exists_max"), functionCall("max", ImmutableList.of("inner_supp"))),
+                                ImmutableMap.of(),
+                                Optional.empty(),
+                                SINGLE,
+                                node(FilterNode.class,
+                                        values("column", "inner_supp")))));
     }
 }
