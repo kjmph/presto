@@ -421,12 +421,34 @@ public final class PlanMatchPattern
 
     public static PlanMatchPattern semiJoin(String sourceSymbolAlias, String filteringSymbolAlias, String outputAlias, PlanMatchPattern source, PlanMatchPattern filtering)
     {
-        return semiJoin(sourceSymbolAlias, filteringSymbolAlias, outputAlias, Optional.empty(), source, filtering);
+        return semiJoin(sourceSymbolAlias, filteringSymbolAlias, outputAlias, Optional.empty(), Optional.empty(), source, filtering);
+    }
+
+    public static PlanMatchPattern semiJoin(String sourceSymbolAlias, String filteringSymbolAlias, String outputAlias, String expectedFilter, PlanMatchPattern source, PlanMatchPattern filtering)
+    {
+        return semiJoin(sourceSymbolAlias, filteringSymbolAlias, outputAlias, Optional.empty(), Optional.of(expectedFilter), source, filtering);
     }
 
     public static PlanMatchPattern semiJoin(String sourceSymbolAlias, String filteringSymbolAlias, String outputAlias, Optional<SemiJoinNode.DistributionType> distributionType, PlanMatchPattern source, PlanMatchPattern filtering)
     {
-        return node(SemiJoinNode.class, source, filtering).with(new SemiJoinMatcher(sourceSymbolAlias, filteringSymbolAlias, outputAlias, distributionType));
+        return semiJoin(sourceSymbolAlias, filteringSymbolAlias, outputAlias, distributionType, Optional.empty(), source, filtering);
+    }
+
+    public static PlanMatchPattern semiJoin(
+            String sourceSymbolAlias,
+            String filteringSymbolAlias,
+            String outputAlias,
+            Optional<SemiJoinNode.DistributionType> distributionType,
+            Optional<String> expectedFilter,
+            PlanMatchPattern source,
+            PlanMatchPattern filtering)
+    {
+        return node(SemiJoinNode.class, source, filtering).with(new SemiJoinMatcher(
+                sourceSymbolAlias,
+                filteringSymbolAlias,
+                outputAlias,
+                distributionType,
+                expectedFilter.map(predicate -> rewriteIdentifiersToSymbolReferences(new SqlParser().createExpression(predicate)))));
     }
 
     public static PlanMatchPattern join(PlanMatchPattern left, PlanMatchPattern right)

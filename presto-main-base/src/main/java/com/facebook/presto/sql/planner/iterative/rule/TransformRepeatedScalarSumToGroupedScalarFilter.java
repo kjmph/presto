@@ -62,6 +62,7 @@ import java.util.Set;
 
 import static com.facebook.presto.SystemSessionProperties.isNativeExecutionEnabled;
 import static com.facebook.presto.SystemSessionProperties.shouldPushAggregationThroughJoin;
+import static com.facebook.presto.SystemSessionProperties.shouldRewriteRepeatedScalarSumToGroupedScalarFilter;
 import static com.facebook.presto.common.function.OperatorType.EQUAL;
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.expressions.LogicalRowExpressions.and;
@@ -129,7 +130,9 @@ public class TransformRepeatedScalarSumToGroupedScalarFilter
     @Override
     public boolean isEnabled(Session session)
     {
-        return isNativeExecutionEnabled(session) && shouldPushAggregationThroughJoin(session);
+        return isNativeExecutionEnabled(session) &&
+                shouldPushAggregationThroughJoin(session) &&
+                shouldRewriteRepeatedScalarSumToGroupedScalarFilter(session);
     }
 
     @Override
