@@ -35,7 +35,8 @@ ShuffleRead::ShuffleRead(
           std::make_shared<core::ExchangeNode>(
               shuffleReadNode->id(),
               shuffleReadNode->outputType(),
-              "CompactRow"),
+              "CompactRow",
+              std::string{core::TransportKind::kInMemory}),
           exchangeClient,
           "ShuffleRead") {
   initStats();
