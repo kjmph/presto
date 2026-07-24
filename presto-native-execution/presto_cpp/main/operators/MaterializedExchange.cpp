@@ -58,7 +58,8 @@ MaterializedExchange::MaterializedExchange(
           std::make_shared<core::ExchangeNode>(
               materializedExchangeNode->id(),
               materializedExchangeNode->outputType(),
-              "CompactRow"),
+              "CompactRow",
+              std::string{core::TransportKind::kInMemory}),
           exchangeClient,
           "MaterializedExchange") {}
 
