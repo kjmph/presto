@@ -25,6 +25,7 @@ import com.facebook.presto.spi.plan.SpatialJoinNode;
 import com.facebook.presto.spi.plan.UnionNode;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.google.common.annotations.VisibleForTesting;
@@ -169,6 +170,13 @@ public class AllAtOnceExecutionSchedule
         {
             node.getProbeSource().accept(this, context);
             node.getIndexSource().accept(this, context);
+            return null;
+        }
+
+        @Override
+        public Void visitGroupedScalarFilter(GroupedScalarFilterNode node, Void context)
+        {
+            node.getSource().accept(this, context);
             return null;
         }
 

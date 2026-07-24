@@ -25,6 +25,8 @@ import com.facebook.presto.hive.metastore.thrift.MockHiveMetastoreClient;
 import com.facebook.presto.hive.metastore.thrift.ThriftHiveMetastore;
 import com.facebook.presto.hive.metastore.thrift.ThriftHiveMetastoreStats;
 import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.SchemaTableName;
+import com.facebook.presto.spi.constraints.ForeignKeyConstraint;
 import com.facebook.presto.spi.constraints.NotNullConstraint;
 import com.facebook.presto.spi.constraints.PrimaryKeyConstraint;
 import com.facebook.presto.spi.constraints.TableConstraint;
@@ -84,6 +86,7 @@ public class TestHiveTableConstraints
     {
         List<TableConstraint<String>> expectedConstraints = ImmutableList.of(
                 new PrimaryKeyConstraint<>(Optional.of("pk"), new LinkedHashSet<>(ImmutableList.of("c1")), true, true, false),
+                new ForeignKeyConstraint<>(Optional.of("fk"), new LinkedHashSet<>(ImmutableList.of("c2")), new SchemaTableName(TEST_DATABASE, "parent_table"), new LinkedHashSet<>(ImmutableList.of("id")), true, true, false),
                 new UniqueConstraint<>(Optional.of("uk"), new LinkedHashSet<>(ImmutableList.of("c2")), true, true, false),
                 new NotNullConstraint<>("c3"));
 

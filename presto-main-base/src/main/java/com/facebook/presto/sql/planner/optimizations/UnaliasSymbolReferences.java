@@ -68,6 +68,7 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.MergeProcessorNode;
 import com.facebook.presto.sql.planner.plan.MergeWriterNode;
@@ -227,6 +228,22 @@ public class UnaliasSymbolReferences
         }
 
         @Override
+        public PlanNode visitGroupedScalarFilter(GroupedScalarFilterNode node, RewriteContext<Void> context)
+        {
+            PlanNode source = context.rewrite(node.getSource());
+            return new GroupedScalarFilterNode(
+                    node.getSourceLocation(),
+                    node.getId(),
+                    source,
+                    canonicalize(node.getGroupIdVariable()),
+                    node.getGroupedGroupId(),
+                    node.getScalarGroupId(),
+                    canonicalize(node.getScalarValueVariable()),
+                    canonicalize(node.getScalarVariable()),
+                    canonicalize(node.getPredicate()));
+        }
+
+        @Override
         public PlanNode visitExplainAnalyze(ExplainAnalyzeNode node, RewriteContext<Void> context)
         {
             PlanNode source = context.rewrite(node.getSource());
@@ -348,6 +365,7 @@ public class UnaliasSymbolReferences
                     outputs.build(),
                     canonicalize(node.getPartitioningScheme().getHashColumn()),
                     node.getPartitioningScheme().isReplicateNullsAndAny(),
+                    node.getPartitioningScheme().isReplicateNulls(),
                     node.getPartitioningScheme().isScaleWriters(),
                     node.getPartitioningScheme().getEncoding(),
                     node.getPartitioningScheme().getBucketToPartition());
@@ -697,6 +715,7 @@ public class UnaliasSymbolReferences
                 canonicalCriteria.stream()
                         .filter(clause -> clause.getLeft().getType().equals(clause.getRight().getType()) && clause.getLeft().getType().equalValuesAreIdentical())
                         .filter(clause -> node.getOutputVariables().contains(clause.getLeft()))
+                        .filter(clause -> !clause.getLeft().equals(clause.getRight()))
                         .forEach(clause -> map(clause.getRight(), clause.getLeft()));
             }
 
@@ -720,10 +739,12 @@ public class UnaliasSymbolReferences
         {
             PlanNode source = context.rewrite(node.getSource());
             PlanNode filteringSource = context.rewrite(node.getFilteringSource());
+            Optional<RowExpression> canonicalFilter = node.getFilter().map(this::canonicalize);
 
             return new SemiJoinNode(
                     node.getSourceLocation(),
                     node.getId(),
+                    node.getStatsEquivalentPlanNode(),
                     source,
                     filteringSource,
                     canonicalize(node.getSourceJoinVariable()),
@@ -732,7 +753,12 @@ public class UnaliasSymbolReferences
                     canonicalize(node.getSourceHashVariable()),
                     canonicalize(node.getFilteringSourceHashVariable()),
                     node.getDistributionType(),
-                    node.getDynamicFilters());
+                    canonicalizeAndDistinct(node.getDynamicFilters()),
+                    node.isSourceKeyUnique(),
+                    node.isFilteringSourceKeyUnique(),
+                    node.isSourceKeyNonNull(),
+                    node.isFilteringSourceKeyNonNull(),
+                    canonicalFilter);
         }
 
         @Override

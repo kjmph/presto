@@ -525,6 +525,7 @@ public class PlanFragmenterUtils
                         outputPartitioningScheme.getOutputLayout(),
                         outputPartitioningScheme.getHashColumn(),
                         outputPartitioningScheme.isReplicateNullsAndAny(),
+                        outputPartitioningScheme.isReplicateNulls(),
                         outputPartitioningScheme.isScaleWriters(),
                         outputPartitioningScheme.getEncoding(),
                         outputPartitioningScheme.getBucketToPartition()),

@@ -33,7 +33,7 @@ export NPROC=${NPROC:-$(getconf _NPROCESSORS_ONLN)}
 
 function install_presto_deps_from_package_managers {
   # proxygen requires c-ares-devel
-  dnf install -y maven java clang-tools-extra jq perl-XML-XPath c-ares-devel
+  dnf_install maven java-17-openjdk-headless clang-tools-extra jq perl-XML-XPath c-ares-devel
   # This python version is installed by the Velox setup scripts
   pip install regex pyyaml chevron black ptsd-jbroll
 }

@@ -29,6 +29,7 @@ import static java.util.Objects.requireNonNull;
         include = JsonTypeInfo.As.PROPERTY,
         property = "@type")
 @JsonSubTypes({
+        @JsonSubTypes.Type(value = ForeignKeyConstraint.class, name = "foreignkeyconstraint"),
         @JsonSubTypes.Type(value = PrimaryKeyConstraint.class, name = "primarykeyconstraint"),
         @JsonSubTypes.Type(value = UniqueConstraint.class, name = "uniqueconstraint"),
         @JsonSubTypes.Type(value = NotNullConstraint.class, name = "notnullconstraint")})
@@ -115,9 +116,9 @@ public abstract class TableConstraint<T>
         stringBuilder.append(" {");
         stringBuilder.append("name='").append(name.orElse("null")).append('\'');
         stringBuilder.append(", columns='").append(columns).append('\'');
-        stringBuilder.append(", enforced='").append(enabled).append('\'');
+        stringBuilder.append(", enabled='").append(enabled).append('\'');
         stringBuilder.append(", rely='").append(rely).append('\'');
-        stringBuilder.append(", validate='").append(enforced).append('\'');
+        stringBuilder.append(", enforced='").append(enforced).append('\'');
         stringBuilder.append('}');
         return stringBuilder.toString();
     }

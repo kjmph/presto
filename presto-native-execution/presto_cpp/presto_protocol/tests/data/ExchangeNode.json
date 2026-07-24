@@ -27,6 +27,7 @@
       }
     ],
     "replicateNullsAndAny": false,
+    "replicateNulls": false,
     "scaleWriters": true,
     "encoding":"COLUMNAR"
   },

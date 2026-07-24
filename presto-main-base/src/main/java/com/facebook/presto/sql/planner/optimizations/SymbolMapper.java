@@ -403,6 +403,7 @@ public class SymbolMapper
                 mapAndDistinctVariable(sourceLayout),
                 scheme.getHashColumn().map(this::map),
                 scheme.isReplicateNullsAndAny(),
+                scheme.isReplicateNulls(),
                 scheme.isScaleWriters(),
                 ExchangeEncoding.COLUMNAR,
                 scheme.getBucketToPartition());
@@ -623,6 +624,7 @@ public class SymbolMapper
                 mapAndDistinctVariable(source.getOutputVariables()),
                 scheme.getHashColumn().map(this::map),
                 scheme.isReplicateNullsAndAny(),
+                scheme.isReplicateNulls(),
                 scheme.isScaleWriters(),
                 scheme.getEncoding(),
                 scheme.getBucketToPartition());

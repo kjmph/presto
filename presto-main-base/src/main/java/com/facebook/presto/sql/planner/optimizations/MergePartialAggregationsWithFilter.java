@@ -413,6 +413,7 @@ public class MergePartialAggregationsWithFilter
                         children.get(children.size() - 1).getOutputVariables(),
                         node.getPartitioningScheme().getHashColumn(),
                         node.getPartitioningScheme().isReplicateNullsAndAny(),
+                        node.getPartitioningScheme().isReplicateNulls(),
                         node.getPartitioningScheme().isScaleWriters(),
                         node.getPartitioningScheme().getEncoding(),
                         node.getPartitioningScheme().getBucketToPartition());

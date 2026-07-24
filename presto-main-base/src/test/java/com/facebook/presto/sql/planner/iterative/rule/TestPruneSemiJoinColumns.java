@@ -17,6 +17,7 @@ import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
+import com.facebook.presto.sql.relational.FunctionResolution;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
@@ -25,11 +26,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Predicate;
 
+import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.expression;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.semiJoin;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strictProject;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
 import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identityAssignments;
+import static com.facebook.presto.sql.relational.Expressions.comparisonExpression;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 
 public class TestPruneSemiJoinColumns
@@ -79,6 +82,24 @@ public class TestPruneSemiJoinColumns
                                         values("rightKey"))));
     }
 
+    @Test
+    public void testSourceFilterColumnNeeded()
+    {
+        tester().assertThat(new PruneSemiJoinColumns())
+                .on(p -> buildProjectedFilteredSemiJoin(p, variable -> variable.getName().equals("match")))
+                .matches(
+                        strictProject(
+                                ImmutableMap.of("match", expression("match")),
+                                semiJoin("leftKey", "rightKey", "match",
+                                        strictProject(
+                                                ImmutableMap.of(
+                                                        "leftKey", expression("leftKey"),
+                                                        "leftKeyHash", expression("leftKeyHash"),
+                                                        "leftFilterValue", expression("leftFilterValue")),
+                                                values("leftKey", "leftKeyHash", "leftValue", "leftFilterValue")),
+                                        values("rightKey", "rightFilterValue"))));
+    }
+
     private static PlanNode buildProjectedSemiJoin(PlanBuilder p, Predicate<VariableReferenceExpression> projectionFilter)
     {
         VariableReferenceExpression match = p.variable("match");
@@ -98,7 +119,38 @@ public class TestPruneSemiJoinColumns
                         match,
                         Optional.of(leftKeyHash),
                         Optional.empty(),
-                        p.values(leftKey, leftKeyHash, leftValue),
-                        p.values(rightKey)));
+                p.values(leftKey, leftKeyHash, leftValue),
+                p.values(rightKey)));
+    }
+
+    private PlanNode buildProjectedFilteredSemiJoin(PlanBuilder p, Predicate<VariableReferenceExpression> projectionFilter)
+    {
+        VariableReferenceExpression match = p.variable("match");
+        VariableReferenceExpression leftKey = p.variable("leftKey");
+        VariableReferenceExpression leftKeyHash = p.variable("leftKeyHash");
+        VariableReferenceExpression leftValue = p.variable("leftValue");
+        VariableReferenceExpression leftFilterValue = p.variable("leftFilterValue");
+        VariableReferenceExpression rightKey = p.variable("rightKey");
+        VariableReferenceExpression rightFilterValue = p.variable("rightFilterValue");
+        List<VariableReferenceExpression> outputs = ImmutableList.of(match, leftKey, leftKeyHash, leftValue, leftFilterValue);
+        return p.project(
+                identityAssignments(
+                        outputs.stream()
+                                .filter(projectionFilter)
+                                .collect(toImmutableList())),
+                p.semiJoin(
+                        p.values(leftKey, leftKeyHash, leftValue, leftFilterValue),
+                        p.values(rightKey, rightFilterValue),
+                        leftKey,
+                        rightKey,
+                        match,
+                        Optional.of(leftKeyHash),
+                        Optional.empty(),
+                        Optional.empty(),
+                        Optional.of(comparisonExpression(
+                                new FunctionResolution(getFunctionManager().getFunctionAndTypeResolver()),
+                                NOT_EQUAL,
+                                leftFilterValue,
+                                rightFilterValue))));
     }
 }

@@ -20,8 +20,11 @@ import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.MaterializedViewDefinition;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.PrestoWarning;
+import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.WarningCollector;
+import com.facebook.presto.spi.connector.ConnectorCapabilities;
+import com.facebook.presto.spi.constraints.ForeignKeyConstraint;
 import com.facebook.presto.spi.constraints.PrimaryKeyConstraint;
 import com.facebook.presto.spi.constraints.TableConstraint;
 import com.facebook.presto.spi.constraints.UniqueConstraint;
@@ -30,17 +33,20 @@ import com.facebook.presto.sql.analyzer.SemanticException;
 import com.facebook.presto.sql.tree.AddConstraint;
 import com.facebook.presto.sql.tree.ConstraintSpecification;
 import com.facebook.presto.sql.tree.Expression;
+import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.transaction.TransactionManager;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static com.facebook.presto.metadata.MetadataUtil.createQualifiedObjectName;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
 import static com.facebook.presto.spi.StandardWarningCode.SEMANTIC_WARNING;
 import static com.facebook.presto.spi.connector.ConnectorCapabilities.ENFORCE_CONSTRAINTS;
+import static com.facebook.presto.spi.connector.ConnectorCapabilities.FOREIGN_KEY_CONSTRAINT;
 import static com.facebook.presto.spi.connector.ConnectorCapabilities.PRIMARY_KEY_CONSTRAINT;
 import static com.facebook.presto.spi.connector.ConnectorCapabilities.UNIQUE_CONSTRAINT;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.MISSING_TABLE;
@@ -52,32 +58,65 @@ import static java.util.stream.Collectors.toCollection;
 public class AddConstraintTask
         implements DDLDefinitionTask<AddConstraint>
 {
-    public static TableConstraint<String> convertToTableConstraint(Metadata metadata, Session session, ConnectorId connectorId, ConstraintSpecification node, WarningCollector warningCollector, String query)
+    public static TableConstraint<String> convertToTableConstraint(Metadata metadata, Session session, ConnectorId connectorId, QualifiedObjectName tableName, ConstraintSpecification node, WarningCollector warningCollector, String query)
     {
         TableConstraint<String> tableConstraint;
+        Set<ConnectorCapabilities> connectorCapabilities = metadata.getConnectorCapabilities(session, connectorId);
         LinkedHashSet<String> constraintColumns = node.getColumns().stream().collect(toCollection(LinkedHashSet::new));
         switch (node.getConstraintType()) {
             case UNIQUE:
-                if (!metadata.getConnectorCapabilities(session, connectorId).contains(UNIQUE_CONSTRAINT)) {
+                if (!connectorCapabilities.contains(UNIQUE_CONSTRAINT)) {
                     throw new SemanticException(NOT_SUPPORTED, node, "Catalog %s does not support Unique constraints", connectorId.getCatalogName());
                 }
                 tableConstraint = new UniqueConstraint<>(node.getConstraintName(), constraintColumns, node.isEnabled(), node.isRely(), node.isEnforced());
                 break;
             case PRIMARY_KEY:
-                if (!metadata.getConnectorCapabilities(session, connectorId).contains(PRIMARY_KEY_CONSTRAINT)) {
+                if (!connectorCapabilities.contains(PRIMARY_KEY_CONSTRAINT)) {
                     throw new SemanticException(NOT_SUPPORTED, node, "Catalog %s does not support Primary Key constraints", connectorId.getCatalogName());
                 }
                 tableConstraint = new PrimaryKeyConstraint<>(node.getConstraintName(), constraintColumns, node.isEnabled(), node.isRely(), node.isEnforced());
+                break;
+            case FOREIGN_KEY:
+                if (!connectorCapabilities.contains(FOREIGN_KEY_CONSTRAINT)) {
+                    throw new SemanticException(NOT_SUPPORTED, node, "Catalog %s does not support Foreign Key constraints", connectorId.getCatalogName());
+                }
+                LinkedHashSet<String> referencedColumns = node.getReferencedColumns().stream().collect(toCollection(LinkedHashSet::new));
+                tableConstraint = new ForeignKeyConstraint<>(
+                        node.getConstraintName(),
+                        constraintColumns,
+                        resolveReferencedTable(tableName, node.getReferencedTable().get(), node),
+                        referencedColumns,
+                        node.isEnabled(),
+                        node.isRely(),
+                        node.isEnforced());
                 break;
             default:
                 throw new SemanticException(NOT_SUPPORTED, node, "Given constraint type %s is not supported", node.getConstraintType().toString());
         }
 
-        if (!metadata.getConnectorCapabilities(session, connectorId).contains(ENFORCE_CONSTRAINTS) && node.isEnforced()) {
+        if (!connectorCapabilities.contains(ENFORCE_CONSTRAINTS) && node.isEnforced()) {
             warningCollector.add(new PrestoWarning(SEMANTIC_WARNING, format("Constraint %s is set to ENFORCED. This connector does not support enforcement of table constraints", node.getConstraintName().orElse(""))));
         }
 
         return tableConstraint;
+    }
+
+    private static SchemaTableName resolveReferencedTable(QualifiedObjectName tableName, QualifiedName referencedTable, ConstraintSpecification node)
+    {
+        List<String> parts = referencedTable.getParts();
+        switch (parts.size()) {
+            case 1:
+                return new SchemaTableName(tableName.getSchemaName(), parts.get(0));
+            case 2:
+                return new SchemaTableName(parts.get(0), parts.get(1));
+            case 3:
+                if (!parts.get(0).equals(tableName.getCatalogName())) {
+                    throw new SemanticException(NOT_SUPPORTED, node, "Foreign key constraints across catalogs are not supported");
+                }
+                return new SchemaTableName(parts.get(1), parts.get(2));
+            default:
+                throw new SemanticException(NOT_SUPPORTED, node, "Invalid referenced table name: %s", referencedTable);
+        }
     }
 
     @Override
@@ -111,7 +150,7 @@ public class AddConstraintTask
 
         accessControl.checkCanAddConstraints(session.getRequiredTransactionId(), session.getIdentity(), session.getAccessControlContext(), tableName);
 
-        metadata.addConstraint(session, tableHandle.get(), convertToTableConstraint(metadata, session, connectorId, statement.getConstraintSpecification(), warningCollector, query));
+        metadata.addConstraint(session, tableHandle.get(), convertToTableConstraint(metadata, session, connectorId, tableName, statement.getConstraintSpecification(), warningCollector, query));
         return immediateFuture(null);
     }
 }

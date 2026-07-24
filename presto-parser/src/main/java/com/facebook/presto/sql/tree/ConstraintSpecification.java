@@ -27,6 +27,7 @@ public final class ConstraintSpecification
 {
     public enum ConstraintType
     {
+        FOREIGN_KEY,
         UNIQUE,
         PRIMARY_KEY
     }
@@ -34,26 +35,54 @@ public final class ConstraintSpecification
     private final Optional<String> constraintName;
     private final List<String> columns;
     private final ConstraintType constraintType;
+    private final Optional<QualifiedName> referencedTable;
+    private final List<String> referencedColumns;
     private final boolean enabled;
     private final boolean rely;
     private final boolean enforced;
 
     public ConstraintSpecification(Optional<String> constraintName, List<String> columns, ConstraintType constraintType, boolean enabled, boolean rely, boolean enforced)
     {
-        this(Optional.empty(), constraintName, columns, constraintType, enabled, rely, enforced);
+        this(Optional.empty(), constraintName, columns, constraintType, Optional.empty(), ImmutableList.of(), enabled, rely, enforced);
     }
 
     public ConstraintSpecification(NodeLocation location, Optional<String> constraintName, List<String> columns, ConstraintType constraintType, boolean enabled, boolean rely, boolean enforced)
     {
-        this(Optional.of(location), constraintName, columns, constraintType, enabled, rely, enforced);
+        this(Optional.of(location), constraintName, columns, constraintType, Optional.empty(), ImmutableList.of(), enabled, rely, enforced);
     }
 
-    private ConstraintSpecification(Optional<NodeLocation> location, Optional<String> constraintName, List<String> columns, ConstraintType constraintType, boolean enabled, boolean rely, boolean enforced)
+    public ConstraintSpecification(Optional<String> constraintName, List<String> columns, QualifiedName referencedTable, List<String> referencedColumns, boolean enabled, boolean rely, boolean enforced)
+    {
+        this(Optional.empty(), constraintName, columns, ConstraintType.FOREIGN_KEY, Optional.of(referencedTable), referencedColumns, enabled, rely, enforced);
+    }
+
+    public ConstraintSpecification(NodeLocation location, Optional<String> constraintName, List<String> columns, QualifiedName referencedTable, List<String> referencedColumns, boolean enabled, boolean rely, boolean enforced)
+    {
+        this(Optional.of(location), constraintName, columns, ConstraintType.FOREIGN_KEY, Optional.of(referencedTable), referencedColumns, enabled, rely, enforced);
+    }
+
+    private ConstraintSpecification(Optional<NodeLocation> location, Optional<String> constraintName, List<String> columns, ConstraintType constraintType, Optional<QualifiedName> referencedTable, List<String> referencedColumns, boolean enabled, boolean rely, boolean enforced)
     {
         super(location);
         this.constraintName = requireNonNull(constraintName, "constraint name is null");
-        this.columns = requireNonNull(columns, "constraint columns is null");
-        this.constraintType = constraintType;
+        this.columns = ImmutableList.copyOf(requireNonNull(columns, "constraint columns is null"));
+        this.constraintType = requireNonNull(constraintType, "constraintType is null");
+        this.referencedTable = requireNonNull(referencedTable, "referencedTable is null");
+        this.referencedColumns = ImmutableList.copyOf(requireNonNull(referencedColumns, "referencedColumns is null"));
+        if (constraintType == ConstraintType.FOREIGN_KEY) {
+            if (!referencedTable.isPresent()) {
+                throw new IllegalArgumentException("referencedTable is missing for foreign key");
+            }
+            if (referencedColumns.isEmpty()) {
+                throw new IllegalArgumentException("referencedColumns is empty for foreign key");
+            }
+            if (columns.size() != referencedColumns.size()) {
+                throw new IllegalArgumentException("foreign key columns and referenced columns must have the same size");
+            }
+        }
+        else if (referencedTable.isPresent() || !referencedColumns.isEmpty()) {
+            throw new IllegalArgumentException("referenced table and columns are only valid for foreign key constraints");
+        }
         this.enabled = enabled;
         this.rely = rely;
         this.enforced = enforced;
@@ -72,6 +101,16 @@ public final class ConstraintSpecification
     public ConstraintType getConstraintType()
     {
         return constraintType;
+    }
+
+    public Optional<QualifiedName> getReferencedTable()
+    {
+        return referencedTable;
+    }
+
+    public List<String> getReferencedColumns()
+    {
+        return referencedColumns;
     }
 
     public boolean isRely()
@@ -114,6 +153,8 @@ public final class ConstraintSpecification
         return Objects.equals(constraintName, o.constraintName) &&
                 Objects.equals(columns, o.columns) &&
                 Objects.equals(constraintType, o.constraintType) &&
+                Objects.equals(referencedTable, o.referencedTable) &&
+                Objects.equals(referencedColumns, o.referencedColumns) &&
                 Objects.equals(rely, o.rely) &&
                 Objects.equals(enabled, o.enabled) &&
                 Objects.equals(enforced, o.enforced);
@@ -122,7 +163,7 @@ public final class ConstraintSpecification
     @Override
     public int hashCode()
     {
-        return Objects.hash(constraintName, columns, constraintType, rely, enabled, enforced);
+        return Objects.hash(constraintName, columns, constraintType, referencedTable, referencedColumns, rely, enabled, enforced);
     }
 
     @Override
@@ -132,6 +173,8 @@ public final class ConstraintSpecification
                 .add("constraintName", constraintName)
                 .add("columns", columns)
                 .add("constraintType", constraintType)
+                .add("referencedTable", referencedTable)
+                .add("referencedColumns", referencedColumns)
                 .add("rely", rely)
                 .add("enabled", enabled)
                 .add("enforced", enforced)
