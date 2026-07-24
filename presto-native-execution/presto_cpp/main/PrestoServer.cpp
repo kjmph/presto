@@ -82,6 +82,10 @@
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
 
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+#include "velox/experimental/ucx-exchange/UcxCpuRowDriverAdapter.h"
+#endif
+
 #ifdef PRESTO_ENABLE_CUDF
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -209,6 +213,19 @@ void registerVeloxCudf() {
 #endif
 }
 
+void startVeloxCpuUcxExchange() {
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  if (!velox::ucx_exchange::cpuUcxExchangeEnabled()) {
+    return;
+  }
+
+  VELOX_CHECK(
+      velox::ucx_exchange::startCpuUcxExchange(),
+      "CPU UCX exchange is enabled, but its communicator did not start");
+  PRESTO_STARTUP_LOG(INFO) << "CPU UCX exchange is started.";
+#endif
+}
+
 void unregisterVeloxCudf() {
 #ifdef PRESTO_ENABLE_CUDF
   auto systemConfig = SystemConfig::instance();
@@ -312,6 +329,12 @@ void PrestoServer::run() {
   // We need to register cuDF before the connectors so that the cuDF connector
   // factories can be used.
   registerVeloxCudf();
+
+  // Start CPU-row UCX before the HTTP server and discovery announcer. Once a
+  // worker is visible to the coordinator, every peer must be able to connect
+  // to its UCX listener; starting lazily from the first query driver races
+  // remote exchange sources on multi-worker queries.
+  startVeloxCpuUcxExchange();
 
   // Register Presto connector factories and connectors
   registerConnectors();
