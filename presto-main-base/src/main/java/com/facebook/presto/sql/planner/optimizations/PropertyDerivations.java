@@ -255,7 +255,7 @@ public class PropertyDerivations
         @Override
         public ActualProperties visitGroupedScalarFilter(GroupedScalarFilterNode node, List<ActualProperties> inputProperties)
         {
-            return Iterables.getOnlyElement(inputProperties).withReplicatedNulls(false);
+            return inputProperties.stream().collect(onlyElement()).withReplicatedNulls(false);
         }
 
         @Override
