@@ -890,6 +890,7 @@ struct PartitioningScheme {
   List<VariableReferenceExpression> outputLayout = {};
   std::shared_ptr<VariableReferenceExpression> hashColumn = {};
   bool replicateNullsAndAny = {};
+  bool replicateNulls = {};
   bool scaleWriters = {};
   ExchangeEncoding encoding = {};
   std::shared_ptr<List<int>> bucketToPartition = {};
@@ -1393,6 +1394,21 @@ void to_json(json& j, const FilterNode& p);
 void from_json(const json& j, FilterNode& p);
 } // namespace facebook::presto::protocol
 namespace facebook::presto::protocol {
+struct GroupedScalarFilterNode : public PlanNode {
+  std::shared_ptr<PlanNode> source = {};
+  VariableReferenceExpression groupIdVariable = {};
+  int64_t groupedGroupId = {};
+  int64_t scalarGroupId = {};
+  VariableReferenceExpression scalarValueVariable = {};
+  VariableReferenceExpression scalarVariable = {};
+  std::shared_ptr<RowExpression> predicate = {};
+
+  GroupedScalarFilterNode() noexcept;
+};
+void to_json(json& j, const GroupedScalarFilterNode& p);
+void from_json(const json& j, GroupedScalarFilterNode& p);
+} // namespace facebook::presto::protocol
+namespace facebook::presto::protocol {
 enum class BoundType {
   UNBOUNDED_PRECEDING,
   PRECEDING,
@@ -1741,6 +1757,12 @@ struct JoinNode : public PlanNode {
   std::shared_ptr<VariableReferenceExpression> rightHashVariable = {};
   std::shared_ptr<JoinDistributionType> distributionType = {};
   Map<String, VariableReferenceExpression> dynamicFilters = {};
+  bool leftKeysUnique = {};
+  bool rightKeysUnique = {};
+  bool leftKeysNonNull = {};
+  bool rightKeysNonNull = {};
+  bool leftKeysCoveredByRightKeys = {};
+  bool rightKeysCoveredByLeftKeys = {};
 
   JoinNode() noexcept;
 };
@@ -2379,6 +2401,11 @@ struct SemiJoinNode : public PlanNode {
   std::shared_ptr<VariableReferenceExpression> filteringSourceHashVariable = {};
   std::shared_ptr<DistributionType> distributionType = {};
   Map<String, VariableReferenceExpression> dynamicFilters = {};
+  std::shared_ptr<std::shared_ptr<RowExpression>> filter = {};
+  bool sourceKeyUnique = {};
+  bool filteringSourceKeyUnique = {};
+  bool sourceKeyNonNull = {};
+  bool filteringSourceKeyNonNull = {};
 
   SemiJoinNode() noexcept;
 };

@@ -704,6 +704,29 @@ public class PlanBuilder
             Optional<VariableReferenceExpression> filteringSourceHashVariable,
             Optional<SemiJoinNode.DistributionType> distributionType)
     {
+        return semiJoin(
+                source,
+                filteringSource,
+                sourceJoinVariable,
+                filteringSourceJoinVariable,
+                semiJoinOutput,
+                sourceHashVariable,
+                filteringSourceHashVariable,
+                distributionType,
+                Optional.empty());
+    }
+
+    public SemiJoinNode semiJoin(
+            PlanNode source,
+            PlanNode filteringSource,
+            VariableReferenceExpression sourceJoinVariable,
+            VariableReferenceExpression filteringSourceJoinVariable,
+            VariableReferenceExpression semiJoinOutput,
+            Optional<VariableReferenceExpression> sourceHashVariable,
+            Optional<VariableReferenceExpression> filteringSourceHashVariable,
+            Optional<SemiJoinNode.DistributionType> distributionType,
+            Optional<RowExpression> filter)
+    {
         return new SemiJoinNode(
                 filteringSource.getSourceLocation(),
                 idAllocator.getNextId(),
@@ -715,7 +738,12 @@ public class PlanBuilder
                 sourceHashVariable,
                 filteringSourceHashVariable,
                 distributionType,
-                ImmutableMap.of());
+                ImmutableMap.of(),
+                false,
+                false,
+                false,
+                false,
+                filter);
     }
 
     public IndexSourceNode indexSource(

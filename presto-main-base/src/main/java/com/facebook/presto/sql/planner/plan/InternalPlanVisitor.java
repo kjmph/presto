@@ -78,6 +78,11 @@ public abstract class InternalPlanVisitor<R, C>
         return visitPlan(node, context);
     }
 
+    public R visitGroupedScalarFilter(GroupedScalarFilterNode node, C context)
+    {
+        return visitPlan(node, context);
+    }
+
     public R visitRowNumber(RowNumberNode node, C context)
     {
         return visitPlan(node, context);

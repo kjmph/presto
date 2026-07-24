@@ -12,6 +12,7 @@ Synopsis
       { column_name data_type [NOT NULL] [ COMMENT comment ] [ WITH ( property_name = expression [, ...] ) ]
       | LIKE existing_table_name [ { INCLUDING | EXCLUDING } PROPERTIES ]
       | [ CONSTRAINT constraint_name ] { PRIMARY KEY | UNIQUE } ( { column_name [, ...] } ) [ { ENABLED | DISABLED } ] [ [ NOT ] RELY ] [ [ NOT ] ENFORCED ] }
+      | [ CONSTRAINT constraint_name ] FOREIGN KEY ( { column_name [, ...] } ) REFERENCES referenced_table_name ( { referenced_column_name [, ...] } ) [ { ENABLED | DISABLED } ] [ [ NOT ] RELY ] [ [ NOT ] ENFORCED ] }
       [, ...]
     )
     [ COMMENT table_comment ]
@@ -47,6 +48,14 @@ name as one of the copied properties, the value from the ``WITH`` clause
 will be used. The default behavior is ``EXCLUDING PROPERTIES``. The
 ``INCLUDING PROPERTIES`` option maybe specified for at most one table.
 
+Table constraints may be marked ``ENABLED`` or ``DISABLED``, ``RELY`` or
+``NOT RELY``, and ``ENFORCED`` or ``NOT ENFORCED``. Connector support for
+storing, enforcing, and using constraints during planning depends on the
+connector. A ``RELY`` constraint is trusted metadata for query planning when
+the connector supports it, even if the constraint is not enforced by Presto.
+Only mark a constraint as ``RELY`` when the data is guaranteed to satisfy the
+constraint outside of Presto.
+
 
 Examples
 --------
@@ -73,6 +82,15 @@ key constraint on column ``orderkey``::
       PRIMARY KEY (orderkey)
     )
     COMMENT 'A table to keep track of orders.'
+
+Create the table ``lineitem`` with a disabled foreign key constraint on
+``orderkey``::
+
+    CREATE TABLE lineitem (
+      orderkey bigint,
+      linenumber bigint,
+      CONSTRAINT fk_lineitem_orders FOREIGN KEY (orderkey) REFERENCES orders (orderkey) DISABLED RELY NOT ENFORCED
+    )
 
 Create the table ``bigger_orders`` using the columns from ``orders``
 plus additional columns at the start and end::

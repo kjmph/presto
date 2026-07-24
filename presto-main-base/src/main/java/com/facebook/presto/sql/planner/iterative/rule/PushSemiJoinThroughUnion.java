@@ -89,6 +89,10 @@ public class PushSemiJoinThroughUnion
     @Override
     public Result apply(SemiJoinNode semiJoinNode, Captures captures, Context context)
     {
+        if (semiJoinNode.getFilter().isPresent()) {
+            return Result.empty();
+        }
+
         PlanNode source = context.getLookup().resolve(semiJoinNode.getSource());
 
         if (source instanceof UnionNode) {

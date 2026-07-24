@@ -36,6 +36,7 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaNotFoundException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.TableNotFoundException;
+import com.facebook.presto.spi.constraints.ForeignKeyConstraint;
 import com.facebook.presto.spi.constraints.NotNullConstraint;
 import com.facebook.presto.spi.constraints.PrimaryKeyConstraint;
 import com.facebook.presto.spi.constraints.TableConstraint;
@@ -124,6 +125,7 @@ public class BridgingHiveMetastore
         if (primaryKey.isPresent()) {
             constraints.add(primaryKey.get());
         }
+        constraints.addAll(delegate.getForeignKeyConstraints(metastoreContext, databaseName, tableName));
         constraints.addAll(delegate.getUniqueConstraints(metastoreContext, databaseName, tableName));
         constraints.addAll(delegate.getNotNullConstraints(metastoreContext, databaseName, tableName));
         return constraints.build();
@@ -439,11 +441,11 @@ public class BridgingHiveMetastore
     public MetastoreOperationResult addConstraint(MetastoreContext metastoreContext, String databaseName, String tableName, TableConstraint<String> tableConstraint)
     {
         MetastoreOperationResult result;
-        if (tableConstraint instanceof UniqueConstraint || tableConstraint instanceof PrimaryKeyConstraint || tableConstraint instanceof NotNullConstraint) {
+        if (tableConstraint instanceof UniqueConstraint || tableConstraint instanceof PrimaryKeyConstraint || tableConstraint instanceof NotNullConstraint || tableConstraint instanceof ForeignKeyConstraint) {
             result = delegate.addConstraint(metastoreContext, databaseName, tableName, tableConstraint);
         }
         else {
-            throw new PrestoException(NOT_SUPPORTED, "Hive metastore supports only unique/primary key/not null constraints");
+            throw new PrestoException(NOT_SUPPORTED, "Hive metastore supports only unique/primary key/not null/foreign key constraints");
         }
         return result;
     }

@@ -14,6 +14,8 @@
 package com.facebook.presto.sql.planner.plan;
 
 import com.facebook.presto.spi.SourceLocation;
+import com.facebook.presto.spi.plan.LogicalProperties;
+import com.facebook.presto.spi.plan.LogicalPropertiesProvider;
 import com.facebook.presto.spi.plan.OrderingScheme;
 import com.facebook.presto.spi.plan.Partitioning;
 import com.facebook.presto.spi.plan.PartitioningHandle;
@@ -143,7 +145,7 @@ public class ExchangeNode
                 "local exchanges do not support constant partition function arguments");
         checkArgument(scope == REMOTE_STREAMING || partitioningScheme.getEncoding() == COLUMNAR, "Only REMOTE_STREAMING can be ROW_WISE: %s", partitioningScheme.getEncoding());
 
-        checkArgument(!scope.isRemote() || type == REPARTITION || !partitioningScheme.isReplicateNullsAndAny(), "Only REPARTITION can replicate remotely");
+        checkArgument(!scope.isRemote() || type == REPARTITION || !(partitioningScheme.isReplicateNullsAndAny() || partitioningScheme.isReplicateNulls()), "Only REPARTITION can replicate remotely");
         checkArgument(scope != REMOTE_MATERIALIZED || type == REPARTITION, "Only REPARTITION can be REMOTE_MATERIALIZED: %s", type);
 
         orderingScheme.ifPresent(ordering -> {
@@ -328,6 +330,13 @@ public class ExchangeNode
     public List<VariableReferenceExpression> getOutputVariables()
     {
         return partitioningScheme.getOutputLayout();
+    }
+
+    @Override
+    public LogicalProperties computeLogicalProperties(LogicalPropertiesProvider logicalPropertiesProvider)
+    {
+        requireNonNull(logicalPropertiesProvider, "logicalPropertiesProvider cannot be null.");
+        return logicalPropertiesProvider.getExchangeProperties(this);
     }
 
     @JsonProperty

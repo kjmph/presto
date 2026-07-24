@@ -70,7 +70,12 @@ public class ReplicateSemiJoinInDelete
                     node.getSourceHashVariable(),
                     node.getFilteringSourceHashVariable(),
                     node.getDistributionType(),
-                    node.getDynamicFilters());
+                    node.getDynamicFilters(),
+                    node.isSourceKeyUnique(),
+                    node.isFilteringSourceKeyUnique(),
+                    node.isSourceKeyNonNull(),
+                    node.isFilteringSourceKeyNonNull(),
+                    node.getFilter());
 
             if (isDeleteQuery) {
                 planChanged = true;

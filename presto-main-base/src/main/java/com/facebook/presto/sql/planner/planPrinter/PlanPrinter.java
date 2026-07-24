@@ -97,6 +97,7 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.MergeProcessorNode;
@@ -447,8 +448,15 @@ public class PlanPrinter
 
         builder.append(indentString(1));
         boolean replicateNullsAndAny = partitioningScheme.isReplicateNullsAndAny();
+        boolean replicateNulls = partitioningScheme.isReplicateNulls();
         if (replicateNullsAndAny) {
             builder.append(format("Output partitioning: %s (replicate nulls and any) [%s]%s%n",
+                    partitioningScheme.getPartitioning().getHandle(),
+                    Joiner.on(", ").join(partitioningScheme.getPartitioning().getArguments()),
+                    formatHash(partitioningScheme.getHashColumn())));
+        }
+        else if (replicateNulls) {
+            builder.append(format("Output partitioning: %s (replicate nulls) [%s]%s%n",
                     partitioningScheme.getPartitioning().getHandle(),
                     Joiner.on(", ").join(partitioningScheme.getPartitioning().getArguments()),
                     formatHash(partitioningScheme.getHashColumn())));
@@ -570,6 +578,14 @@ public class PlanPrinter
             }
 
             node.getDistributionType().ifPresent(distributionType -> nodeOutput.appendDetailsLine("Distribution: %s", distributionType));
+            nodeOutput.appendDetailsLine(
+                    "Key properties: left(unique=%s, nonNull=%s, coveredByRight=%s), right(unique=%s, nonNull=%s, coveredByLeft=%s)",
+                    node.isLeftKeysUnique(),
+                    node.isLeftKeysNonNull(),
+                    node.isLeftKeysCoveredByRightKeys(),
+                    node.isRightKeysUnique(),
+                    node.isRightKeysNonNull(),
+                    node.isRightKeysCoveredByLeftKeys());
             if (!node.getDynamicFilters().isEmpty()) {
                 nodeOutput.appendDetails(getDynamicFilterAssignments(node));
             }
@@ -606,6 +622,13 @@ public class PlanPrinter
                             node.getFilteringSourceJoinVariable(),
                             formatHash(node.getSourceHashVariable(), node.getFilteringSourceHashVariable())));
             node.getDistributionType().ifPresent(distributionType -> nodeOutput.appendDetailsLine("Distribution: %s", distributionType));
+            nodeOutput.appendDetailsLine(
+                    "Key properties: source(unique=%s, nonNull=%s), filteringSource(unique=%s, nonNull=%s)",
+                    node.isSourceKeyUnique(),
+                    node.isSourceKeyNonNull(),
+                    node.isFilteringSourceKeyUnique(),
+                    node.isFilteringSourceKeyNonNull());
+            node.getFilter().ifPresent(filter -> nodeOutput.appendDetailsLine("Filter: %s", formatter.apply(filter)));
             if (!node.getDynamicFilters().isEmpty()) {
                 nodeOutput.appendDetails(getDynamicFilterAssignments(node));
             }
@@ -762,6 +785,24 @@ public class PlanPrinter
         }
 
         @Override
+        public Void visitGroupedScalarFilter(GroupedScalarFilterNode node, Void context)
+        {
+            addNode(
+                    node,
+                    "GroupedScalarFilter",
+                    format(
+                            "[groupId=%s groupedGroupId=%s scalarGroupId=%s scalarValue=%s scalarVariable=%s filter=%s]",
+                            node.getGroupIdVariable(),
+                            node.getGroupedGroupId(),
+                            node.getScalarGroupId(),
+                            node.getScalarValueVariable(),
+                            node.getScalarVariable(),
+                            formatter.apply(node.getPredicate())));
+
+            return processChildren(node, context);
+        }
+
+        @Override
         public Void visitMarkDistinct(MarkDistinctNode node, Void context)
         {
             addNode(node,
@@ -848,9 +889,26 @@ public class PlanPrinter
                     format("TopNRowNumber%s", node.isPartial() ? "Partial" : ""),
                     format("[%s limit %s]%s", Joiner.on(", ").join(args), node.getMaxRowCountPerPartition(), formatHash(node.getHashVariable())));
 
-            nodeOutput.appendDetailsLine("%s := %s%s", node.getRowNumberVariable(), "row_number()", formatSourceLocation(node.getRowNumberVariable().getSourceLocation()));
+            nodeOutput.appendDetailsLine(
+                    "%s := %s%s",
+                    node.getRowNumberVariable(),
+                    formatRankingFunction(node.getRankingFunction()),
+                    formatSourceLocation(node.getRowNumberVariable().getSourceLocation()));
 
             return processChildren(node, context);
+        }
+
+        private String formatRankingFunction(TopNRowNumberNode.RankingFunction rankingFunction)
+        {
+            switch (rankingFunction) {
+                case ROW_NUMBER:
+                    return "row_number()";
+                case RANK:
+                    return "rank()";
+                case DENSE_RANK:
+                    return "dense_rank()";
+            }
+            throw new IllegalArgumentException("Unsupported ranking function: " + rankingFunction);
         }
 
         @Override
@@ -1285,7 +1343,7 @@ public class PlanPrinter
                         "LocalExchange",
                         format("[%s%s]%s (%s)",
                                 node.getPartitioningScheme().getPartitioning().getHandle(),
-                                node.getPartitioningScheme().isReplicateNullsAndAny() ? " - REPLICATE NULLS AND ANY" : "",
+                                formatReplicatedNulls(node.getPartitioningScheme()),
                                 formatHash(node.getPartitioningScheme().getHashColumn()),
                                 Joiner.on(", ").join(node.getPartitioningScheme().getPartitioning().getArguments())));
             }
@@ -1295,7 +1353,7 @@ public class PlanPrinter
                         format("[%s - %s%s]%s",
                                 node.getType(),
                                 node.getPartitioningScheme().getEncoding(),
-                                node.getPartitioningScheme().isReplicateNullsAndAny() ? " - REPLICATE NULLS AND ANY" : "",
+                                formatReplicatedNulls(node.getPartitioningScheme()),
                                 formatHash(node.getPartitioningScheme().getHashColumn())));
             }
             return processChildren(node, context);
@@ -1759,6 +1817,17 @@ public class PlanPrinter
         }
 
         return "[" + Joiner.on(", ").join(variables) + "]";
+    }
+
+    private static String formatReplicatedNulls(PartitioningScheme partitioningScheme)
+    {
+        if (partitioningScheme.isReplicateNullsAndAny()) {
+            return " - REPLICATE NULLS AND ANY";
+        }
+        if (partitioningScheme.isReplicateNulls()) {
+            return " - REPLICATE NULLS";
+        }
+        return "";
     }
 
     private static String formatOutputs(Iterable<VariableReferenceExpression> outputs)

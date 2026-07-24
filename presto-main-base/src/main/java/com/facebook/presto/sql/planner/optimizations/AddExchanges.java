@@ -78,6 +78,7 @@ import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode.Scope;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.MergeWriterNode;
@@ -375,6 +376,13 @@ public class AddExchanges
         {
             PreferredProperties childPreference = preferredProperties.translate(translateGroupIdVariables(node));
             PlanWithProperties child = planChild(node, childPreference);
+            return rebaseAndDeriveProperties(node, child);
+        }
+
+        @Override
+        public PlanWithProperties visitGroupedScalarFilter(GroupedScalarFilterNode node, PreferredProperties preferredProperties)
+        {
+            PlanWithProperties child = accept(node.getSource(), PreferredProperties.any());
             return rebaseAndDeriveProperties(node, child);
         }
 
@@ -1717,8 +1725,8 @@ public class AddExchanges
         {
             // TODO: move this logic to PlanChecker once PropertyDerivations.deriveProperties fully supports local exchanges
             ActualProperties outputProperties = PropertyDerivations.deriveProperties(result, inputProperties, metadata, session);
-            verify(result instanceof SemiJoinNode || inputProperties.stream().noneMatch(ActualProperties::isNullsAndAnyReplicated) || outputProperties.isNullsAndAnyReplicated(),
-                    "SemiJoinNode is the only node that can strip null replication");
+            verify(result instanceof SemiJoinNode || result instanceof GroupedScalarFilterNode || inputProperties.stream().noneMatch(ActualProperties::isNullsAndAnyReplicated) || outputProperties.isNullsAndAnyReplicated(),
+                    "SemiJoinNode and GroupedScalarFilterNode are the only nodes that can strip null replication");
             return outputProperties;
         }
 

@@ -17,6 +17,7 @@ import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
+import com.facebook.presto.sql.relational.FunctionResolution;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
@@ -25,10 +26,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Predicate;
 
+import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.expression;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.semiJoin;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strictProject;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
+import static com.facebook.presto.sql.relational.Expressions.comparisonExpression;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 
 public class TestPruneSemiJoinFilteringSourceColumns
@@ -57,6 +60,22 @@ public class TestPruneSemiJoinFilteringSourceColumns
                 .doesNotFire();
     }
 
+    @Test
+    public void testFilteringSourceFilterColumnNeeded()
+    {
+        tester().assertThat(new PruneSemiJoinFilteringSourceColumns())
+                .on(p -> buildFilteredSemiJoin(p, variable -> true))
+                .matches(
+                        semiJoin("leftKey", "rightKey", "match",
+                                values("leftKey", "leftFilterValue"),
+                                strictProject(
+                                        ImmutableMap.of(
+                                                "rightKey", expression("rightKey"),
+                                                "rightKeyHash", expression("rightKeyHash"),
+                                                "rightFilterValue", expression("rightFilterValue")),
+                                        values("rightKey", "rightKeyHash", "rightValue", "rightFilterValue"))));
+    }
+
     private static PlanNode buildSemiJoin(PlanBuilder p, Predicate<VariableReferenceExpression> filteringSourceVariableFilter)
     {
         VariableReferenceExpression match = p.variable("match");
@@ -77,5 +96,35 @@ public class TestPruneSemiJoinFilteringSourceColumns
                 p.values(
                         filteredSourceVariables,
                         ImmutableList.of()));
+    }
+
+    private PlanNode buildFilteredSemiJoin(PlanBuilder p, Predicate<VariableReferenceExpression> filteringSourceVariableFilter)
+    {
+        VariableReferenceExpression match = p.variable("match");
+        VariableReferenceExpression leftKey = p.variable("leftKey");
+        VariableReferenceExpression leftFilterValue = p.variable("leftFilterValue");
+        VariableReferenceExpression rightKey = p.variable("rightKey");
+        VariableReferenceExpression rightKeyHash = p.variable("rightKeyHash");
+        VariableReferenceExpression rightValue = p.variable("rightValue");
+        VariableReferenceExpression rightFilterValue = p.variable("rightFilterValue");
+        List<VariableReferenceExpression> filteringSourceVariables = ImmutableList.of(rightKey, rightKeyHash, rightValue, rightFilterValue);
+        List<VariableReferenceExpression> filteredSourceVariables = filteringSourceVariables.stream().filter(filteringSourceVariableFilter).collect(toImmutableList());
+
+        return p.semiJoin(
+                p.values(leftKey, leftFilterValue),
+                p.values(
+                        filteredSourceVariables,
+                        ImmutableList.of()),
+                leftKey,
+                rightKey,
+                match,
+                Optional.empty(),
+                Optional.of(rightKeyHash),
+                Optional.empty(),
+                Optional.of(comparisonExpression(
+                        new FunctionResolution(getFunctionManager().getFunctionAndTypeResolver()),
+                        NOT_EQUAL,
+                        leftFilterValue,
+                        rightFilterValue)));
     }
 }

@@ -191,7 +191,7 @@ public class CreateTableTask
             }
             else if (element instanceof ConstraintSpecification) {
                 accessControl.checkCanAddConstraints(session.getRequiredTransactionId(), session.getIdentity(), session.getAccessControlContext(), tableName);
-                constraints.add(convertToTableConstraint(metadata, session, connectorId, (ConstraintSpecification) element, warningCollector, query));
+                constraints.add(convertToTableConstraint(metadata, session, connectorId, tableName, (ConstraintSpecification) element, warningCollector, query));
             }
             else {
                 throw new PrestoException(GENERIC_INTERNAL_ERROR, "Invalid TableElement: " + element.getClass().getName());

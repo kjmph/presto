@@ -18,7 +18,9 @@ import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.plan.SemiJoinNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
+import com.facebook.presto.sql.planner.VariablesExtractor;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
 
 import java.util.Optional;
@@ -48,7 +50,15 @@ public class PruneSemiJoinColumns
                         referencedOutputs.stream()
                                 .filter(variable -> !variable.equals(semiJoinNode.getSemiJoinOutput())),
                         Stream.of(semiJoinNode.getSourceJoinVariable()),
-                        semiJoinNode.getSourceHashVariable().map(Stream::of).orElseGet(Stream::empty))
+                        semiJoinNode.getSourceHashVariable().map(Stream::of).orElseGet(Stream::empty),
+                        semiJoinNode.getFilter()
+                                .map(VariablesExtractor::extractUnique)
+                                .map(variables -> {
+                                    Set<VariableReferenceExpression> sourceVariables = ImmutableSet.copyOf(semiJoinNode.getSource().getOutputVariables());
+                                    return variables.stream()
+                                            .filter(sourceVariables::contains);
+                                })
+                                .orElseGet(Stream::empty))
                 .collect(toImmutableSet());
 
         return restrictOutputs(idAllocator, semiJoinNode.getSource(), requiredSourceInputs)

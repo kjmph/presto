@@ -352,6 +352,7 @@ public class PartitioningUtils
                 newOutputLayout,
                 newHashSymbol,
                 partitioningScheme.isReplicateNullsAndAny(),
+                partitioningScheme.isReplicateNulls(),
                 partitioningScheme.isScaleWriters(),
                 partitioningScheme.getEncoding(),
                 partitioningScheme.getBucketToPartition());

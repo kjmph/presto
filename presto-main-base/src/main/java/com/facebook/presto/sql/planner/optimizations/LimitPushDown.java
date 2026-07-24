@@ -253,7 +253,12 @@ public class LimitPushDown
                         node.getSourceHashVariable(),
                         node.getFilteringSourceHashVariable(),
                         node.getDistributionType(),
-                        node.getDynamicFilters());
+                        node.getDynamicFilters(),
+                        node.isSourceKeyUnique(),
+                        node.isFilteringSourceKeyUnique(),
+                        node.isSourceKeyNonNull(),
+                        node.isFilteringSourceKeyNonNull(),
+                        node.getFilter());
             }
             return node;
         }

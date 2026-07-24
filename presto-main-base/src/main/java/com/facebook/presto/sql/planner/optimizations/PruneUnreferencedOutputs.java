@@ -62,6 +62,7 @@ import com.facebook.presto.sql.planner.plan.AssignUniqueId;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.MergeProcessorNode;
 import com.facebook.presto.sql.planner.plan.MergeWriterNode;
@@ -174,6 +175,7 @@ public class PruneUnreferencedOutputs
                     newOutputVariables,
                     node.getPartitioningScheme().getHashColumn(),
                     node.getPartitioningScheme().isReplicateNullsAndAny(),
+                    node.getPartitioningScheme().isReplicateNulls(),
                     node.getPartitioningScheme().isScaleWriters(),
                     node.getPartitioningScheme().getEncoding(),
                     node.getPartitioningScheme().getBucketToPartition());
@@ -272,13 +274,25 @@ public class PruneUnreferencedOutputs
             if (node.getSourceHashVariable().isPresent()) {
                 sourceInputsBuilder.add(node.getSourceHashVariable().get());
             }
-            Set<VariableReferenceExpression> sourceInputs = sourceInputsBuilder.build();
 
             ImmutableSet.Builder<VariableReferenceExpression> filteringSourceInputBuilder = ImmutableSet.builder();
             filteringSourceInputBuilder.add(node.getFilteringSourceJoinVariable());
             if (node.getFilteringSourceHashVariable().isPresent()) {
                 filteringSourceInputBuilder.add(node.getFilteringSourceHashVariable().get());
             }
+            if (node.getFilter().isPresent()) {
+                Set<VariableReferenceExpression> sourceVariables = ImmutableSet.copyOf(node.getSource().getOutputVariables());
+                Set<VariableReferenceExpression> filteringSourceVariables = ImmutableSet.copyOf(node.getFilteringSource().getOutputVariables());
+                for (VariableReferenceExpression variable : VariablesExtractor.extractUnique(node.getFilter().get())) {
+                    if (sourceVariables.contains(variable)) {
+                        sourceInputsBuilder.add(variable);
+                    }
+                    if (filteringSourceVariables.contains(variable)) {
+                        filteringSourceInputBuilder.add(variable);
+                    }
+                }
+            }
+            Set<VariableReferenceExpression> sourceInputs = sourceInputsBuilder.build();
             Set<VariableReferenceExpression> filteringSourceInputs = filteringSourceInputBuilder.build();
 
             PlanNode source = context.rewrite(node.getSource(), sourceInputs);
@@ -296,7 +310,12 @@ public class PruneUnreferencedOutputs
                     node.getSourceHashVariable(),
                     node.getFilteringSourceHashVariable(),
                     node.getDistributionType(),
-                    node.getDynamicFilters());
+                    node.getDynamicFilters(),
+                    node.isSourceKeyUnique(),
+                    node.isFilteringSourceKeyUnique(),
+                    node.isSourceKeyNonNull(),
+                    node.isFilteringSourceKeyNonNull(),
+                    node.getFilter());
         }
 
         @Override
@@ -666,6 +685,32 @@ public class PruneUnreferencedOutputs
 
             PlanNode source = context.rewrite(node.getSource(), expectedInputs.build());
             return new GroupIdNode(node.getSourceLocation(), node.getId(), node.getStatsEquivalentPlanNode(), source, newGroupingSets.build(), newGroupingMapping, newAggregationArguments, node.getGroupIdVariable());
+        }
+
+        @Override
+        public PlanNode visitGroupedScalarFilter(GroupedScalarFilterNode node, RewriteContext<Set<VariableReferenceExpression>> context)
+        {
+            Set<VariableReferenceExpression> expectedInputs = ImmutableSet.<VariableReferenceExpression>builder()
+                    .addAll(context.get())
+                    .add(node.getGroupIdVariable())
+                    .add(node.getScalarValueVariable())
+                    .addAll(VariablesExtractor.extractUnique(node.getPredicate()).stream()
+                            .filter(variable -> !variable.equals(node.getScalarVariable()))
+                            .collect(toImmutableSet()))
+                    .build();
+
+            PlanNode source = context.rewrite(node.getSource(), expectedInputs);
+            return new GroupedScalarFilterNode(
+                    node.getSourceLocation(),
+                    node.getId(),
+                    node.getStatsEquivalentPlanNode(),
+                    source,
+                    node.getGroupIdVariable(),
+                    node.getGroupedGroupId(),
+                    node.getScalarGroupId(),
+                    node.getScalarValueVariable(),
+                    node.getScalarVariable(),
+                    node.getPredicate());
         }
 
         @Override

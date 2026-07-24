@@ -664,6 +664,10 @@ void to_json(json& j, const std::shared_ptr<PlanNode>& p) {
     j = *std::static_pointer_cast<GroupIdNode>(p);
     return;
   }
+  if (type == "com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode") {
+    j = *std::static_pointer_cast<GroupedScalarFilterNode>(p);
+    return;
+  }
   if (type == ".DeleteNode") {
     j = *std::static_pointer_cast<DeleteNode>(p);
     return;
@@ -816,6 +820,13 @@ void from_json(const json& j, std::shared_ptr<PlanNode>& p) {
   }
   if (type == "com.facebook.presto.sql.planner.plan.GroupIdNode") {
     std::shared_ptr<GroupIdNode> k = std::make_shared<GroupIdNode>();
+    j.get_to(*k);
+    p = std::static_pointer_cast<PlanNode>(k);
+    return;
+  }
+  if (type == "com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode") {
+    std::shared_ptr<GroupedScalarFilterNode> k =
+        std::make_shared<GroupedScalarFilterNode>();
     j.get_to(*k);
     p = std::static_pointer_cast<PlanNode>(k);
     return;
@@ -3299,6 +3310,13 @@ void to_json(json& j, const PartitioningScheme& p) {
       "replicateNullsAndAny");
   to_json_key(
       j,
+      "replicateNulls",
+      p.replicateNulls,
+      "PartitioningScheme",
+      "bool",
+      "replicateNulls");
+  to_json_key(
+      j,
       "scaleWriters",
       p.scaleWriters,
       "PartitioningScheme",
@@ -3349,6 +3367,17 @@ void from_json(const json& j, PartitioningScheme& p) {
       "PartitioningScheme",
       "bool",
       "replicateNullsAndAny");
+  if (j.count("replicateNulls")) {
+    from_json_key(
+        j,
+        "replicateNulls",
+        p.replicateNulls,
+        "PartitioningScheme",
+        "bool",
+        "replicateNulls");
+  } else {
+    p.replicateNulls = false;
+  }
   from_json_key(
       j,
       "scaleWriters",
@@ -5871,6 +5900,111 @@ void from_json(const json& j, FilterNode& p) {
 }
 } // namespace facebook::presto::protocol
 namespace facebook::presto::protocol {
+GroupedScalarFilterNode::GroupedScalarFilterNode() noexcept {
+  _type = "com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode";
+}
+
+void to_json(json& j, const GroupedScalarFilterNode& p) {
+  j = json::object();
+  j["@type"] =
+      "com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode";
+  to_json_key(j, "id", p.id, "GroupedScalarFilterNode", "PlanNodeId", "id");
+  to_json_key(
+      j, "source", p.source, "GroupedScalarFilterNode", "PlanNode", "source");
+  to_json_key(
+      j,
+      "groupIdVariable",
+      p.groupIdVariable,
+      "GroupedScalarFilterNode",
+      "VariableReferenceExpression",
+      "groupIdVariable");
+  to_json_key(
+      j,
+      "groupedGroupId",
+      p.groupedGroupId,
+      "GroupedScalarFilterNode",
+      "int64_t",
+      "groupedGroupId");
+  to_json_key(
+      j,
+      "scalarGroupId",
+      p.scalarGroupId,
+      "GroupedScalarFilterNode",
+      "int64_t",
+      "scalarGroupId");
+  to_json_key(
+      j,
+      "scalarValueVariable",
+      p.scalarValueVariable,
+      "GroupedScalarFilterNode",
+      "VariableReferenceExpression",
+      "scalarValueVariable");
+  to_json_key(
+      j,
+      "scalarVariable",
+      p.scalarVariable,
+      "GroupedScalarFilterNode",
+      "VariableReferenceExpression",
+      "scalarVariable");
+  to_json_key(
+      j,
+      "predicate",
+      p.predicate,
+      "GroupedScalarFilterNode",
+      "RowExpression",
+      "predicate");
+}
+
+void from_json(const json& j, GroupedScalarFilterNode& p) {
+  p._type = j["@type"];
+  from_json_key(j, "id", p.id, "GroupedScalarFilterNode", "PlanNodeId", "id");
+  from_json_key(
+      j, "source", p.source, "GroupedScalarFilterNode", "PlanNode", "source");
+  from_json_key(
+      j,
+      "groupIdVariable",
+      p.groupIdVariable,
+      "GroupedScalarFilterNode",
+      "VariableReferenceExpression",
+      "groupIdVariable");
+  from_json_key(
+      j,
+      "groupedGroupId",
+      p.groupedGroupId,
+      "GroupedScalarFilterNode",
+      "int64_t",
+      "groupedGroupId");
+  from_json_key(
+      j,
+      "scalarGroupId",
+      p.scalarGroupId,
+      "GroupedScalarFilterNode",
+      "int64_t",
+      "scalarGroupId");
+  from_json_key(
+      j,
+      "scalarValueVariable",
+      p.scalarValueVariable,
+      "GroupedScalarFilterNode",
+      "VariableReferenceExpression",
+      "scalarValueVariable");
+  from_json_key(
+      j,
+      "scalarVariable",
+      p.scalarVariable,
+      "GroupedScalarFilterNode",
+      "VariableReferenceExpression",
+      "scalarVariable");
+  from_json_key(
+      j,
+      "predicate",
+      p.predicate,
+      "GroupedScalarFilterNode",
+      "RowExpression",
+      "predicate");
+}
+} // namespace facebook::presto::protocol
+namespace facebook::presto::protocol {
 // Loosely copied this here from NLOHMANN_JSON_SERIALIZE_ENUM()
 
 // NOLINTNEXTLINE: cppcoreguidelines-avoid-c-arrays
@@ -6827,6 +6961,48 @@ void to_json(json& j, const JoinNode& p) {
       "JoinNode",
       "Map<String, VariableReferenceExpression>",
       "dynamicFilters");
+  to_json_key(
+      j,
+      "leftKeysUnique",
+      p.leftKeysUnique,
+      "JoinNode",
+      "bool",
+      "leftKeysUnique");
+  to_json_key(
+      j,
+      "rightKeysUnique",
+      p.rightKeysUnique,
+      "JoinNode",
+      "bool",
+      "rightKeysUnique");
+  to_json_key(
+      j,
+      "leftKeysNonNull",
+      p.leftKeysNonNull,
+      "JoinNode",
+      "bool",
+      "leftKeysNonNull");
+  to_json_key(
+      j,
+      "rightKeysNonNull",
+      p.rightKeysNonNull,
+      "JoinNode",
+      "bool",
+      "rightKeysNonNull");
+  to_json_key(
+      j,
+      "leftKeysCoveredByRightKeys",
+      p.leftKeysCoveredByRightKeys,
+      "JoinNode",
+      "bool",
+      "leftKeysCoveredByRightKeys");
+  to_json_key(
+      j,
+      "rightKeysCoveredByLeftKeys",
+      p.rightKeysCoveredByLeftKeys,
+      "JoinNode",
+      "bool",
+      "rightKeysCoveredByLeftKeys");
 }
 
 void from_json(const json& j, JoinNode& p) {
@@ -6884,6 +7060,60 @@ void from_json(const json& j, JoinNode& p) {
       "JoinNode",
       "Map<String, VariableReferenceExpression>",
       "dynamicFilters");
+  if (j.count("leftKeysUnique")) {
+    from_json_key(
+        j,
+        "leftKeysUnique",
+        p.leftKeysUnique,
+        "JoinNode",
+        "bool",
+        "leftKeysUnique");
+  }
+  if (j.count("rightKeysUnique")) {
+    from_json_key(
+        j,
+        "rightKeysUnique",
+        p.rightKeysUnique,
+        "JoinNode",
+        "bool",
+        "rightKeysUnique");
+  }
+  if (j.count("leftKeysNonNull")) {
+    from_json_key(
+        j,
+        "leftKeysNonNull",
+        p.leftKeysNonNull,
+        "JoinNode",
+        "bool",
+        "leftKeysNonNull");
+  }
+  if (j.count("rightKeysNonNull")) {
+    from_json_key(
+        j,
+        "rightKeysNonNull",
+        p.rightKeysNonNull,
+        "JoinNode",
+        "bool",
+        "rightKeysNonNull");
+  }
+  if (j.count("leftKeysCoveredByRightKeys")) {
+    from_json_key(
+        j,
+        "leftKeysCoveredByRightKeys",
+        p.leftKeysCoveredByRightKeys,
+        "JoinNode",
+        "bool",
+        "leftKeysCoveredByRightKeys");
+  }
+  if (j.count("rightKeysCoveredByLeftKeys")) {
+    from_json_key(
+        j,
+        "rightKeysCoveredByLeftKeys",
+        p.rightKeysCoveredByLeftKeys,
+        "JoinNode",
+        "bool",
+        "rightKeysCoveredByLeftKeys");
+  }
 }
 } // namespace facebook::presto::protocol
 namespace facebook::presto::protocol {
@@ -10565,6 +10795,35 @@ void to_json(json& j, const SemiJoinNode& p) {
       "SemiJoinNode",
       "Map<String, VariableReferenceExpression>",
       "dynamicFilters");
+  to_json_key(j, "filter", p.filter, "SemiJoinNode", "RowExpression", "filter");
+  to_json_key(
+      j,
+      "sourceKeyUnique",
+      p.sourceKeyUnique,
+      "SemiJoinNode",
+      "bool",
+      "sourceKeyUnique");
+  to_json_key(
+      j,
+      "filteringSourceKeyUnique",
+      p.filteringSourceKeyUnique,
+      "SemiJoinNode",
+      "bool",
+      "filteringSourceKeyUnique");
+  to_json_key(
+      j,
+      "sourceKeyNonNull",
+      p.sourceKeyNonNull,
+      "SemiJoinNode",
+      "bool",
+      "sourceKeyNonNull");
+  to_json_key(
+      j,
+      "filteringSourceKeyNonNull",
+      p.filteringSourceKeyNonNull,
+      "SemiJoinNode",
+      "bool",
+      "filteringSourceKeyNonNull");
 }
 
 void from_json(const json& j, SemiJoinNode& p) {
@@ -10627,6 +10886,46 @@ void from_json(const json& j, SemiJoinNode& p) {
       "SemiJoinNode",
       "Map<String, VariableReferenceExpression>",
       "dynamicFilters");
+  if (j.count("filter")) {
+    from_json_key(
+        j, "filter", p.filter, "SemiJoinNode", "RowExpression", "filter");
+  }
+  if (j.count("sourceKeyUnique")) {
+    from_json_key(
+        j,
+        "sourceKeyUnique",
+        p.sourceKeyUnique,
+        "SemiJoinNode",
+        "bool",
+        "sourceKeyUnique");
+  }
+  if (j.count("filteringSourceKeyUnique")) {
+    from_json_key(
+        j,
+        "filteringSourceKeyUnique",
+        p.filteringSourceKeyUnique,
+        "SemiJoinNode",
+        "bool",
+        "filteringSourceKeyUnique");
+  }
+  if (j.count("sourceKeyNonNull")) {
+    from_json_key(
+        j,
+        "sourceKeyNonNull",
+        p.sourceKeyNonNull,
+        "SemiJoinNode",
+        "bool",
+        "sourceKeyNonNull");
+  }
+  if (j.count("filteringSourceKeyNonNull")) {
+    from_json_key(
+        j,
+        "filteringSourceKeyNonNull",
+        p.filteringSourceKeyNonNull,
+        "SemiJoinNode",
+        "bool",
+        "filteringSourceKeyNonNull");
+  }
 }
 } // namespace facebook::presto::protocol
 namespace facebook::presto::protocol {
