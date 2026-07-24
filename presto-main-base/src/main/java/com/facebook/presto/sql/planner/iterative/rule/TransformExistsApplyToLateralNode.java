@@ -207,9 +207,9 @@ public class TransformExistsApplyToLateralNode
             return Optional.empty();
         }
 
-        EquiJoinClause clause = getOnlyElement(shape.get().getClauses());
+        EquiJoinClause clause = shape.get().getClauses().stream().collect(onlyElement());
         VariableReferenceExpression marker = context.getVariableAllocator().newVariable(
-                getOnlyElement(applyNode.getSubqueryAssignments().getVariables()).getSourceLocation(),
+                applyNode.getSubqueryAssignments().getVariables().stream().collect(onlyElement()).getSourceLocation(),
                 "exists_marker",
                 BOOLEAN);
         RowExpression filter = comparisonExpression(functionResolution, NOT_EQUAL, shape.get().getSubqueryValue(), shape.get().getCorrelationValue());
@@ -232,7 +232,7 @@ public class TransformExistsApplyToLateralNode
                 false,
                 Optional.of(filter));
 
-        VariableReferenceExpression exists = getOnlyElement(applyNode.getSubqueryAssignments().getVariables());
+        VariableReferenceExpression exists = applyNode.getSubqueryAssignments().getVariables().stream().collect(onlyElement());
         Assignments.Builder assignments = Assignments.builder();
         assignments.putAll(identityAssignments(applyNode.getInput().getOutputVariables()));
         assignments.put(exists, specialForm(COALESCE, BOOLEAN, ImmutableList.of(marker, FALSE_CONSTANT)));
@@ -355,7 +355,7 @@ public class TransformExistsApplyToLateralNode
                 BOOLEAN,
                 ImmutableList.of(logicalRowExpressions.combineDisjuncts(minNotEqual, maxNotEqual), FALSE_CONSTANT));
 
-        VariableReferenceExpression exists = getOnlyElement(applyNode.getSubqueryAssignments().getVariables());
+        VariableReferenceExpression exists = applyNode.getSubqueryAssignments().getVariables().stream().collect(onlyElement());
         Assignments.Builder assignments = Assignments.builder();
         assignments.putAll(identityAssignments(applyNode.getInput().getOutputVariables()));
         assignments.put(exists, existsCondition);
