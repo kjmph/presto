@@ -705,7 +705,7 @@ public final class StreamPropertyDerivations
         @Override
         public StreamProperties visitGroupedScalarFilter(GroupedScalarFilterNode node, List<StreamProperties> inputProperties)
         {
-            return Iterables.getOnlyElement(inputProperties);
+            return inputProperties.stream().collect(onlyElement());
         }
 
         @Override
