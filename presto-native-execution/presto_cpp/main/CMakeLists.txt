@@ -81,6 +81,13 @@ if(PRESTO_ENABLE_CUDF)
   target_link_libraries(presto_server_lib velox_cudf_exec)
 endif()
 
+if(VELOX_ENABLE_UCX_EXCHANGE)
+  # PrestoServer starts UCX before service announcement. Keep the object
+  # library on presto_server_lib so every executable that embeds the server
+  # receives the implementation and its driver-adapter registrations.
+  target_link_libraries(presto_server_lib velox_ucx_exchange)
+endif()
+
 if(PRESTO_ENABLE_REMOTE_FUNCTIONS)
   add_library(presto_server_remote_function JsonSignatureParser.cpp RemoteFunctionRegisterer.cpp)
 

@@ -16,6 +16,8 @@ package com.facebook.presto.sql.planner;
 import com.facebook.presto.common.type.BigintType;
 import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.plan.Ordering;
+import com.facebook.presto.spi.plan.OrderingScheme;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.plan.ValuesNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
@@ -34,6 +36,7 @@ import org.testng.annotations.Test;
 import java.util.Optional;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.common.block.SortOrder.ASC_NULLS_FIRST;
 import static com.facebook.presto.metadata.AbstractMockMetadata.dummyMetadata;
 import static com.facebook.presto.sql.planner.PlannerUtils.containsCoordinatorOnlyNode;
 import static org.testng.Assert.assertEquals;
@@ -192,6 +195,95 @@ public class TestBasePlanFragmenterTransportType
         assertEquals(props.getOutputTransportType(), TransportType.ANY);
     }
 
+    @Test
+    public void testWorkerToWorkerExchangeAllowsAnyTransport()
+    {
+        ExchangeNode exchange = planBuilder.exchange(e -> e
+                .scope(ExchangeNode.Scope.REMOTE_STREAMING)
+                .type(ExchangeNode.Type.GATHER)
+                .addSource(planBuilder.values(col))
+                .addInputsSet(col)
+                .singleDistributionPartitioningScheme(col));
+
+        assertEquals(
+                BasePlanFragmenter.getRemoteStreamingExchangeTransportType(
+                        exchange,
+                        newFragmentProperties()),
+                TransportType.ANY);
+    }
+
+    @Test
+    public void testCoordinatorProducerRequiresHttp()
+    {
+        ExplainAnalyzeNode coordinatorSource = new ExplainAnalyzeNode(
+                Optional.empty(),
+                idAllocator.getNextId(),
+                planBuilder.values(col),
+                col,
+                false,
+                ExplainFormat.Type.TEXT);
+        ExchangeNode exchange = planBuilder.exchange(e -> e
+                .scope(ExchangeNode.Scope.REMOTE_STREAMING)
+                .type(ExchangeNode.Type.GATHER)
+                .addSource(coordinatorSource)
+                .addInputsSet(col)
+                .singleDistributionPartitioningScheme(col));
+
+        assertEquals(
+                BasePlanFragmenter.getRemoteStreamingExchangeTransportType(
+                        exchange,
+                        newFragmentProperties()),
+                TransportType.HTTP);
+    }
+
+    @Test
+    public void testCoordinatorConsumerRequiresHttp()
+    {
+        ExplainAnalyzeNode coordinatorConsumer = new ExplainAnalyzeNode(
+                Optional.empty(),
+                idAllocator.getNextId(),
+                planBuilder.values(col),
+                col,
+                false,
+                ExplainFormat.Type.TEXT);
+        BasePlanFragmenter.FragmentProperties parentProperties =
+                newFragmentProperties();
+        parentProperties.setCoordinatorOnlyDistribution(coordinatorConsumer);
+
+        ExchangeNode exchange = planBuilder.exchange(e -> e
+                .scope(ExchangeNode.Scope.REMOTE_STREAMING)
+                .type(ExchangeNode.Type.GATHER)
+                .addSource(planBuilder.values(col))
+                .addInputsSet(col)
+                .singleDistributionPartitioningScheme(col));
+
+        assertEquals(
+                BasePlanFragmenter.getRemoteStreamingExchangeTransportType(
+                        exchange,
+                        parentProperties),
+                TransportType.HTTP);
+    }
+
+    @Test
+    public void testOrderedWorkerExchangeAllowsAnyTransport()
+    {
+        ExchangeNode exchange = planBuilder.exchange(e -> e
+                .scope(ExchangeNode.Scope.REMOTE_STREAMING)
+                .type(ExchangeNode.Type.GATHER)
+                .addSource(planBuilder.values(col))
+                .addInputsSet(col)
+                .singleDistributionPartitioningScheme(col)
+                .setEnsureSourceOrdering(true)
+                .orderingScheme(new OrderingScheme(
+                        ImmutableList.of(new Ordering(col, ASC_NULLS_FIRST)))));
+
+        assertEquals(
+                BasePlanFragmenter.getRemoteStreamingExchangeTransportType(
+                        exchange,
+                        newFragmentProperties()),
+                TransportType.ANY);
+    }
+
     // -----------------------------------------------------------------------
     // Tests for PlanFragment transport type serialization
     // -----------------------------------------------------------------------
@@ -263,5 +355,15 @@ public class TestBasePlanFragmenterTransportType
                 Optional.empty(),
                 Optional.empty());
         assertEquals(fragment.getOutputTransportType(), TransportType.HTTP);
+    }
+
+    private BasePlanFragmenter.FragmentProperties newFragmentProperties()
+    {
+        return new BasePlanFragmenter.FragmentProperties(
+                new com.facebook.presto.spi.plan.PartitioningScheme(
+                        com.facebook.presto.spi.plan.Partitioning.create(
+                                SystemPartitioningHandle.SINGLE_DISTRIBUTION,
+                                ImmutableList.of()),
+                        ImmutableList.of(col)));
     }
 }

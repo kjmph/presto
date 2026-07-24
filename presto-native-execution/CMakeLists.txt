@@ -68,6 +68,13 @@ option(PRESTO_ENABLE_PARQUET "Enable Parquet support" ON)
 # Forwards user input to VELOX_ENABLE_CUDF.
 option(PRESTO_ENABLE_CUDF "Enable cuDF support" OFF)
 
+# Forwards user input to VELOX_ENABLE_UCX_EXCHANGE. Keep this enabled by
+# default on the UCX research branch so the standard CPU image build includes
+# the experimental CPU-row exchange path without requiring a workflow-specific
+# CMake override. cuDF builds force the Velox option on below as before.
+option(PRESTO_ENABLE_UCX_EXCHANGE
+  "Build the experimental UCX exchange library." ON)
+
 # Forwards user input to VELOX_ENABLE_REMOTE_FUNCTIONS.
 option(PRESTO_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 
@@ -110,6 +117,20 @@ if(PRESTO_ENABLE_CUDF)
   enable_language(CUDA)
   # Determine CUDA_ARCHITECTURES automatically.
   cmake_policy(SET CMP0104 NEW)
+endif()
+
+# Propagate UCX exchange into Velox. Force the derived value because the Docker
+# build reuses its CMake directory and may otherwise retain an older cached
+# VELOX_ENABLE_UCX_EXCHANGE value.
+if(PRESTO_ENABLE_CUDF)
+  set(VELOX_ENABLE_UCX_EXCHANGE ON CACHE BOOL "Build UCX exchange" FORCE)
+else()
+  set(VELOX_ENABLE_UCX_EXCHANGE
+    ${PRESTO_ENABLE_UCX_EXCHANGE}
+    CACHE BOOL "Build UCX exchange" FORCE)
+endif()
+if(VELOX_ENABLE_UCX_EXCHANGE)
+  add_compile_definitions(VELOX_ENABLE_UCX_EXCHANGE)
 endif()
 
 set(

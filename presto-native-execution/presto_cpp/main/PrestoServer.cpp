@@ -84,10 +84,17 @@
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
 
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+#include "velox/experimental/ucx-exchange/UcxCpuRowDriverAdapter.h"
+#endif
+
 #ifdef PRESTO_ENABLE_CUDF
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+#include "velox/experimental/ucx-exchange/UcxCudfDriverAdapter.h"
+#endif
 #endif
 
 #ifdef PRESTO_ENABLE_REMOTE_FUNCTIONS
@@ -193,11 +200,35 @@ void registerVeloxCudf() {
           velox::cudf_velox::CudfConfig::kCudfEnabled)) {
     cudfConfig.initialize(systemConfig->values());
     if (cudfConfig.enabled) {
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+      if (cudfConfig.exchange) {
+        // Driver adapters run in registration order. Install UCX first so it
+        // replaces the exchange boundary before the cuDF adapter converts the
+        // surrounding compute operators.
+        VELOX_CHECK(
+            velox::ucx_exchange::startCudfUcxExchange(),
+            "cuDF UCX exchange is enabled, but its communicator did not start");
+        PRESTO_STARTUP_LOG(INFO) << "cuDF UCX exchange is started.";
+      }
+#endif
       velox::cudf_velox::registerCudf();
       velox::cudf_velox::registerPrestoFunctions(cudfConfig.functionNamePrefix);
       PRESTO_STARTUP_LOG(INFO) << "cuDF is registered.";
     }
   }
+#endif
+}
+
+void startVeloxCpuUcxExchange() {
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  if (!velox::ucx_exchange::cpuUcxExchangeEnabled()) {
+    return;
+  }
+
+  VELOX_CHECK(
+      velox::ucx_exchange::startCpuUcxExchange(),
+      "CPU UCX exchange is enabled, but its communicator did not start");
+  PRESTO_STARTUP_LOG(INFO) << "CPU UCX exchange is started.";
 #endif
 }
 
@@ -304,6 +335,10 @@ void PrestoServer::run() {
   // We need to register cuDF before the connectors so that the cuDF connector
   // factories can be used.
   registerVeloxCudf();
+
+  // A worker must be listening for UCX connections before it becomes visible
+  // to the coordinator and other workers.
+  startVeloxCpuUcxExchange();
 
   // Register Presto connector factories and connectors
   registerConnectors();
