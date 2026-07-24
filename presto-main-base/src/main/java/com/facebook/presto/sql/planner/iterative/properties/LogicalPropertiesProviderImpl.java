@@ -17,6 +17,7 @@ import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.constraints.TableConstraint;
 import com.facebook.presto.spi.constraints.UniqueConstraint;
 import com.facebook.presto.spi.plan.AggregationNode;
+import com.facebook.presto.spi.plan.Assignments;
 import com.facebook.presto.spi.plan.DistinctLimitNode;
 import com.facebook.presto.spi.plan.FilterNode;
 import com.facebook.presto.spi.plan.JoinNode;
@@ -33,6 +34,7 @@ import com.facebook.presto.spi.plan.ValuesNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.iterative.GroupReference;
 import com.facebook.presto.sql.planner.plan.AssignUniqueId;
+import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.relational.FunctionResolution;
 
 import java.util.ArrayList;
@@ -138,6 +140,42 @@ public class LogicalPropertiesProviderImpl
         }
         LogicalPropertiesImpl sourceProperties = (LogicalPropertiesImpl) ((GroupReference) projectNode.getSource()).getLogicalProperties().get();
         return projectProperties(sourceProperties, projectNode.getAssignments());
+    }
+
+    /**
+     * Provides the logical properties for an ExchangeNode. Single-source exchanges preserve
+     * key properties modulo the exchange input-to-output variable mapping. Multi-source
+     * exchanges can merge rows from independent sources, so uniqueness is not generally
+     * preserved without additional disjointness proof.
+     *
+     * @param node
+     * @return The logical properties for an ExchangeNode.
+     */
+    @Override
+    public LogicalProperties getExchangeProperties(PlanNode node)
+    {
+        if (!(node instanceof ExchangeNode)) {
+            throw new IllegalArgumentException("Expected PlanNode to be instance of ExchangeNode");
+        }
+
+        ExchangeNode exchangeNode = (ExchangeNode) node;
+        if (exchangeNode.getSources().size() != 1) {
+            return DEFAULT_LOGICAL_PROPERTIES;
+        }
+
+        PlanNode source = exchangeNode.getSources().get(0);
+        if (!((source instanceof GroupReference) && ((GroupReference) source).getLogicalProperties().isPresent())) {
+            throw new IllegalStateException("Expected source PlanNode to be a GroupReference with LogicalProperties");
+        }
+
+        LogicalPropertiesImpl sourceProperties = (LogicalPropertiesImpl) ((GroupReference) source).getLogicalProperties().get();
+        Assignments.Builder assignments = Assignments.builder();
+        List<VariableReferenceExpression> outputs = exchangeNode.getOutputVariables();
+        List<VariableReferenceExpression> inputs = exchangeNode.getInputs().get(0);
+        for (int i = 0; i < outputs.size(); i++) {
+            assignments.put(outputs.get(i), inputs.get(i));
+        }
+        return projectProperties(sourceProperties, assignments.build());
     }
 
     /**

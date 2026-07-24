@@ -33,6 +33,8 @@ public interface LogicalPropertiesProvider
 
     LogicalProperties getProjectProperties(ProjectNode projectNode);
 
+    LogicalProperties getExchangeProperties(PlanNode exchangeNode);
+
     LogicalProperties getFilterProperties(FilterNode filterNode);
 
     LogicalProperties getJoinProperties(PlanNode joinNode);

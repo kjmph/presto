@@ -176,6 +176,7 @@ public abstract class AbstractTestFilterStatsCalculator
                 .add(new VariableReferenceExpression(Optional.empty(), "unknownRange", DOUBLE))
                 .add(new VariableReferenceExpression(Optional.empty(), "emptyRange", DOUBLE))
                 .add(new VariableReferenceExpression(Optional.empty(), "mediumVarchar", MEDIUM_VARCHAR_TYPE))
+                .add(new VariableReferenceExpression(Optional.empty(), "unknownVarchar", MEDIUM_VARCHAR_TYPE))
                 .build());
 
         MetadataManager metadata = MetadataManager.createTestMetadataManager();
@@ -311,6 +312,53 @@ public abstract class AbstractTestFilterStatsCalculator
         assertExpression("sin(x)")
                 .outputRowsCountUnknown();
         assertExpression("x = sin(x)")
+                .outputRowsCountUnknown();
+    }
+
+    @Test
+    public void testLikePredicateFilter()
+    {
+        VariableReferenceExpression mediumVarchar = new VariableReferenceExpression(Optional.empty(), "mediumVarchar", MEDIUM_VARCHAR_TYPE);
+
+        assertExpression("mediumVarchar LIKE '%abc%'")
+                .outputRowsCount(33.0)
+                .variableStats(mediumVarchar, variableStats ->
+                        variableStats.distinctValuesCount(8.25)
+                                .nullsFraction(0.0));
+
+        assertExpression("mediumVarchar LIKE 'abc%'")
+                .outputRowsCount(66.0)
+                .variableStats(mediumVarchar, variableStats ->
+                        variableStats.distinctValuesCount(16.5)
+                                .nullsFraction(0.0));
+
+        assertExpression("mediumVarchar LIKE '%ab%'")
+                .outputRowsCount(165.0)
+                .variableStats(mediumVarchar, variableStats ->
+                        variableStats.distinctValuesCount(41.25)
+                                .nullsFraction(0.0));
+
+        assertExpression("mediumVarchar LIKE '%'")
+                .outputRowsCount(660.0)
+                .variableStats(mediumVarchar, variableStats ->
+                        variableStats.distinctValuesCount(165.0)
+                                .nullsFraction(0.0));
+
+        assertExpression("mediumVarchar LIKE 'abc'")
+                .outputRowsCount(4.0)
+                .variableStats(mediumVarchar, variableStats ->
+                        variableStats.distinctValuesCount(1.0)
+                                .nullsFraction(0.0));
+
+        VariableReferenceExpression unknownVarchar = new VariableReferenceExpression(Optional.empty(), "unknownVarchar", MEDIUM_VARCHAR_TYPE);
+
+        assertExpression("unknownVarchar LIKE '%abc%'")
+                .outputRowsCount(50.0)
+                .variableStats(unknownVarchar, variableStats ->
+                        variableStats.distinctValuesCountUnknown()
+                                .nullsFraction(0.0));
+
+        assertExpression("unknownVarchar LIKE 'abc'")
                 .outputRowsCountUnknown();
     }
 

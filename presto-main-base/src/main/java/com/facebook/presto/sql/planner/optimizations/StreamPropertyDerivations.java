@@ -55,6 +55,7 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.MergeProcessorNode;
@@ -699,6 +700,12 @@ public final class StreamPropertyDerivations
         public StreamProperties visitSemiJoin(SemiJoinNode node, List<StreamProperties> inputProperties)
         {
             return inputProperties.get(0);
+        }
+
+        @Override
+        public StreamProperties visitGroupedScalarFilter(GroupedScalarFilterNode node, List<StreamProperties> inputProperties)
+        {
+            return Iterables.getOnlyElement(inputProperties);
         }
 
         @Override

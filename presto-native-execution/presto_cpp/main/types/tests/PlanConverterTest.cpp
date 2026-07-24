@@ -51,6 +51,22 @@ core::PlanFragment assertToVeloxFragment(
       prestoPlan, nullptr, "20201107_130540_00011_wrpkw.1.2.3");
 }
 
+core::PlanFragment assertToVeloxFragmentFromJson(
+    const std::string& fragment,
+    memory::MemoryPool* pool = nullptr) {
+  protocol::PlanFragment prestoPlan = json::parse(fragment);
+  std::shared_ptr<memory::MemoryPool> poolPtr;
+  if (pool == nullptr) {
+    poolPtr = memory::deprecatedAddDefaultLeafMemoryPool();
+    pool = poolPtr.get();
+  }
+
+  auto queryCtx = core::QueryCtx::create();
+  VeloxInteractiveQueryPlanConverter converter(queryCtx.get(), pool);
+  return converter.toVeloxQueryPlan(
+      prestoPlan, nullptr, "20201107_130540_00011_wrpkw.1.2.3");
+}
+
 std::shared_ptr<const core::PlanNode> assertToVeloxQueryPlan(
     const std::string& fileName,
     memory::MemoryPool* pool = nullptr) {
@@ -77,6 +93,92 @@ std::shared_ptr<const core::PlanNode> assertToBatchVeloxQueryPlan(
       .toVeloxQueryPlan(
           prestoPlan, nullptr, "20201107_130540_00011_wrpkw.1.2.3")
       .planNode;
+}
+
+std::string joinPlanFragmentJson() {
+  return R"({
+    "id": "fragment",
+    "root": {
+      "@type": ".JoinNode",
+      "id": "join",
+      "type": "INNER",
+      "left": {
+        "@type": ".ValuesNode",
+        "id": "left",
+        "outputVariables": [
+          {"@type": "variable", "name": "l_orderkey", "type": "bigint"}
+        ],
+        "rows": []
+      },
+      "right": {
+        "@type": ".ValuesNode",
+        "id": "right",
+        "outputVariables": [
+          {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+        ],
+        "rows": []
+      },
+      "criteria": [
+        {
+          "left": {"@type": "variable", "name": "l_orderkey", "type": "bigint"},
+          "right": {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+        }
+      ],
+      "outputVariables": [
+        {"@type": "variable", "name": "l_orderkey", "type": "bigint"},
+        {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+      ],
+      "filter": null,
+      "leftHashVariable": null,
+      "rightHashVariable": null,
+      "distributionType": null,
+      "dynamicFilters": {},
+      "leftKeysUnique": true,
+      "rightKeysUnique": false,
+      "leftKeysNonNull": true,
+      "rightKeysNonNull": false,
+      "leftKeysCoveredByRightKeys": true,
+      "rightKeysCoveredByLeftKeys": false
+    }
+  })";
+}
+
+std::string semiJoinPlanFragmentJson() {
+  return R"({
+    "id": "fragment",
+    "root": {
+      "@type": ".SemiJoinNode",
+      "id": "semi_join",
+      "source": {
+        "@type": ".ValuesNode",
+        "id": "source",
+        "outputVariables": [
+          {"@type": "variable", "name": "l_orderkey", "type": "bigint"}
+        ],
+        "rows": []
+      },
+      "filteringSource": {
+        "@type": ".ValuesNode",
+        "id": "filtering",
+        "outputVariables": [
+          {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
+        ],
+        "rows": []
+      },
+      "sourceJoinVariable": {"@type": "variable", "name": "l_orderkey", "type": "bigint"},
+      "filteringSourceJoinVariable": {"@type": "variable", "name": "r_orderkey", "type": "bigint"},
+      "semiJoinOutput": {"@type": "variable", "name": "match", "type": "boolean"},
+      "sourceHashVariable": null,
+      "filteringSourceHashVariable": null,
+      "distributionType": null,
+      "dynamicFilters": {},
+      "filter": null,
+      "sourceKeyUnique": false,
+      "filteringSourceKeyUnique": true,
+      "sourceKeyNonNull": true,
+      "filteringSourceKeyNonNull": true
+    }
+  })";
 }
 } // namespace
 
@@ -216,6 +318,34 @@ TEST_F(PlanConverterTest, indexSource) {
       tableScan->tableHandle().get());
   ASSERT_NE(tableHandle, nullptr);
   ASSERT_EQ(tableHandle->tableName(), "tpch.nation");
+}
+
+TEST_F(PlanConverterTest, joinUniqueKeys) {
+  auto plan = assertToVeloxFragmentFromJson(joinPlanFragmentJson()).planNode;
+  auto join = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
+  ASSERT_NE(join, nullptr);
+  EXPECT_TRUE(join->leftKeysUnique());
+  EXPECT_FALSE(join->rightKeysUnique());
+  EXPECT_TRUE(join->leftKeysNonNull());
+  EXPECT_FALSE(join->rightKeysNonNull());
+  EXPECT_TRUE(join->leftKeysCoveredByRightKeys());
+  EXPECT_FALSE(join->rightKeysCoveredByLeftKeys());
+}
+
+TEST_F(PlanConverterTest, semiJoinUniqueKeys) {
+  auto plan = assertToVeloxFragmentFromJson(semiJoinPlanFragmentJson()).planNode;
+  auto join = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
+  ASSERT_NE(join, nullptr);
+  EXPECT_EQ(join->joinType(), core::JoinType::kLeftSemiProject);
+  EXPECT_FALSE(join->leftKeysUnique());
+  EXPECT_TRUE(join->rightKeysUnique());
+  EXPECT_TRUE(join->leftKeysNonNull());
+  EXPECT_TRUE(join->rightKeysNonNull());
+
+  auto outputType = join->outputType();
+  ASSERT_EQ(outputType->size(), 2);
+  EXPECT_EQ(outputType->nameOf(0), "l_orderkey");
+  EXPECT_EQ(outputType->nameOf(1), "match");
 }
 
 TEST_F(PlanConverterTest, batchPlanConversion) {

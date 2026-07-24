@@ -217,7 +217,11 @@ public final class LikeFunctions
         // Option.MULTILINE specifies that wildcard characters (. and *) should match newlines
         // Option.SINGLELINE specifies that anchors (^ and $) should match the beginning and end of
         // input rather than the beginning and end of the line
-        return new Regex(bytes, 0, bytes.length, Option.MULTILINE | Option.SINGLELINE, NonStrictUTF8Encoding.INSTANCE, SYNTAX);
+        Regex compiled = new Regex(bytes, 0, bytes.length, Option.MULTILINE | Option.SINGLELINE, NonStrictUTF8Encoding.INSTANCE, SYNTAX);
+        if (!shouldEscape) {
+            compiled.setUserObject(patternString);
+        }
+        return compiled;
     }
 
     @SuppressWarnings("NumericCastThatLosesPrecision")

@@ -26,6 +26,7 @@ import com.facebook.presto.spi.plan.SpatialJoinNode;
 import com.facebook.presto.spi.plan.UnionNode;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
+import com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.RPCNode;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
@@ -238,6 +239,12 @@ public class PhasedExecutionSchedule
         public Set<PlanFragmentId> visitMergeJoin(MergeJoinNode node, PlanFragmentId currentFragmentId)
         {
             return processJoin(node.getRight(), node.getLeft(), currentFragmentId);
+        }
+
+        @Override
+        public Set<PlanFragmentId> visitGroupedScalarFilter(GroupedScalarFilterNode node, PlanFragmentId currentFragmentId)
+        {
+            return node.getSource().accept(this, currentFragmentId);
         }
 
         private Set<PlanFragmentId> processJoin(PlanNode build, PlanNode probe, PlanFragmentId currentFragmentId)

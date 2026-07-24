@@ -169,7 +169,12 @@ public class RandomizeSourceKeyInSemiJoin
                 Optional.empty(),
                 Optional.empty(),
                 node.getDistributionType(),
-                ImmutableMap.of());
+                ImmutableMap.of(),
+                false,
+                false,
+                false,
+                false,
+                node.getFilter());
         RowExpression outputExpression = LogicalRowExpressions.or(
                 newSemiJoinOutput,
                 new SpecialFormExpression(

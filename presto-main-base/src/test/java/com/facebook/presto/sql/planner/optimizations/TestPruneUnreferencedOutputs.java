@@ -31,6 +31,7 @@ import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.assertions.OptimizerAssert;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.iterative.rule.test.RuleTester;
+import com.facebook.presto.sql.relational.FunctionResolution;
 import com.facebook.presto.testing.TestingTransactionHandle;
 import com.facebook.presto.tpch.TpchColumnHandle;
 import com.facebook.presto.tpch.TpchTableHandle;
@@ -42,6 +43,7 @@ import org.testng.annotations.Test;
 
 import java.util.Optional;
 
+import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.common.type.DoubleType.DOUBLE;
 import static com.facebook.presto.common.type.VarcharType.VARCHAR;
@@ -56,10 +58,12 @@ import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.inters
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.join;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.output;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.project;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.semiJoin;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strictIndexSource;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strictTableScan;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
 import static com.facebook.presto.sql.relational.Expressions.call;
+import static com.facebook.presto.sql.relational.Expressions.comparisonExpression;
 import static com.facebook.presto.tpch.TpchMetadata.TINY_SCALE_FACTOR;
 
 public class TestPruneUnreferencedOutputs
@@ -253,6 +257,44 @@ public class TestPruneUnreferencedOutputs
                                         ImmutableList.of(equiJoinClause("leftKey", "rightKey")),
                                         values("leftKey"),
                                         values("rightKey"))));
+    }
+
+    @Test
+    public void testSemiJoinFilterInputsAreNotPruned()
+    {
+        assertRuleApplication()
+                .on(p -> {
+                    VariableReferenceExpression match = p.variable("match");
+                    VariableReferenceExpression leftKey = p.variable("leftKey", BIGINT);
+                    VariableReferenceExpression leftFilterValue = p.variable("leftFilterValue", BIGINT);
+                    VariableReferenceExpression leftUnused = p.variable("leftUnused", BIGINT);
+                    VariableReferenceExpression rightKey = p.variable("rightKey", BIGINT);
+                    VariableReferenceExpression rightFilterValue = p.variable("rightFilterValue", BIGINT);
+
+                    return p.output(ImmutableList.of("match"), ImmutableList.of(match),
+                            p.project(
+                                    Assignments.of(match, match),
+                                    p.semiJoin(
+                                            p.values(leftKey, leftFilterValue, leftUnused),
+                                            p.values(rightKey, rightFilterValue),
+                                            leftKey,
+                                            rightKey,
+                                            match,
+                                            Optional.empty(),
+                                            Optional.empty(),
+                                            Optional.empty(),
+                                            Optional.of(comparisonExpression(
+                                                    new FunctionResolution(getFunctionManager().getFunctionAndTypeResolver()),
+                                                    NOT_EQUAL,
+                                                    leftFilterValue,
+                                                    rightFilterValue)))));
+                })
+                .matches(
+                        output(
+                                project(
+                                        semiJoin("leftKey", "rightKey", "match",
+                                                values("leftKey", "leftFilterValue"),
+                                                values("rightKey", "rightFilterValue")))));
     }
 
     private OptimizerAssert assertRuleApplication()

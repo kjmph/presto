@@ -31,6 +31,7 @@ import org.apache.hadoop.hive.metastore.api.ColumnStatisticsObj;
 import org.apache.hadoop.hive.metastore.api.Database;
 import org.apache.hadoop.hive.metastore.api.EnvironmentContext;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
+import org.apache.hadoop.hive.metastore.api.ForeignKeysResponse;
 import org.apache.hadoop.hive.metastore.api.HiveObjectPrivilege;
 import org.apache.hadoop.hive.metastore.api.HiveObjectRef;
 import org.apache.hadoop.hive.metastore.api.LockRequest;
@@ -44,6 +45,7 @@ import org.apache.hadoop.hive.metastore.api.PrincipalType;
 import org.apache.hadoop.hive.metastore.api.PrivilegeBag;
 import org.apache.hadoop.hive.metastore.api.Role;
 import org.apache.hadoop.hive.metastore.api.RolePrincipalGrant;
+import org.apache.hadoop.hive.metastore.api.SQLForeignKey;
 import org.apache.hadoop.hive.metastore.api.SQLNotNullConstraint;
 import org.apache.hadoop.hive.metastore.api.SQLPrimaryKey;
 import org.apache.hadoop.hive.metastore.api.SQLUniqueConstraint;
@@ -54,6 +56,7 @@ import org.apache.hadoop.hive.metastore.api.UniqueConstraintsResponse;
 import org.apache.hadoop.hive.metastore.api.UnlockRequest;
 import org.apache.thrift.TException;
 
+import java.sql.DatabaseMetaData;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -74,6 +77,7 @@ public class MockHiveMetastoreClient
             TEST_DATABASE + TEST_TABLE, ImmutableList.of(new FieldSchema("key", "string", null)),
             TEST_DATABASE + TEST_TABLE_WITH_CONSTRAINTS, ImmutableList.of(new FieldSchema("c1", "string", "Primary Key"), new FieldSchema("c2", "string", "Unique Key"), new FieldSchema("c3", "string", "Not Null")));
     public static final List<SQLPrimaryKey> TEST_PRIMARY_KEY = ImmutableList.of(new SQLPrimaryKey(TEST_DATABASE, TEST_TABLE_WITH_CONSTRAINTS, "c1", 0, "pk", true, false, true));
+    public static final List<SQLForeignKey> TEST_FOREIGN_KEY = ImmutableList.of(new SQLForeignKey(TEST_DATABASE, "parent_table", "id", TEST_DATABASE, TEST_TABLE_WITH_CONSTRAINTS, "c2", 1, DatabaseMetaData.importedKeyNoAction, DatabaseMetaData.importedKeyNoAction, "fk", "parent_pk", true, false, true));
     public static final List<SQLUniqueConstraint> TEST_UNIQUE_CONSTRAINT = ImmutableList.of(new SQLUniqueConstraint("", TEST_DATABASE, TEST_TABLE_WITH_CONSTRAINTS, "c2", 1, "uk", true, false, true));
     public static final List<SQLNotNullConstraint> TEST_NOT_NULL_CONSTRAINT = ImmutableList.of(new SQLNotNullConstraint("", TEST_DATABASE, TEST_TABLE_WITH_CONSTRAINTS, "c3", "nn", true, true, true));
     public static final String TEST_TOKEN = "token";
@@ -349,7 +353,7 @@ public class MockHiveMetastoreClient
     }
 
     @Override
-    public void createTableWithConstraints(Table table, List<SQLPrimaryKey> primaryKeys, List<SQLUniqueConstraint> uniqueConstraints, List<SQLNotNullConstraint> notNullConstraints)
+    public void createTableWithConstraints(Table table, List<SQLPrimaryKey> primaryKeys, List<SQLForeignKey> foreignKeys, List<SQLUniqueConstraint> uniqueConstraints, List<SQLNotNullConstraint> notNullConstraints)
     {
         throw new UnsupportedOperationException();
     }
@@ -514,6 +518,16 @@ public class MockHiveMetastoreClient
     }
 
     @Override
+    public Optional<ForeignKeysResponse> getForeignKeyConstraints(String catName, String dbName, String tableName)
+    {
+        accessCount.incrementAndGet();
+        if (!dbName.equals(TEST_DATABASE) || !tableName.equals(TEST_TABLE_WITH_CONSTRAINTS)) {
+            throw new UnsupportedOperationException();
+        }
+        return Optional.of(new ForeignKeysResponse(TEST_FOREIGN_KEY));
+    }
+
+    @Override
     public Optional<NotNullConstraintsResponse> getNotNullConstraints(String catName, String dbName, String tableName)
     {
         accessCount.incrementAndGet();
@@ -539,6 +553,13 @@ public class MockHiveMetastoreClient
 
     @Override
     public void addPrimaryKeyConstraint(List<SQLPrimaryKey> constraint)
+            throws TException
+    {
+        // No-op
+    }
+
+    @Override
+    public void addForeignKeyConstraint(List<SQLForeignKey> constraint)
             throws TException
     {
         // No-op
