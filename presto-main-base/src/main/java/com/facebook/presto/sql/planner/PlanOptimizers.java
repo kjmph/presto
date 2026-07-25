@@ -975,6 +975,16 @@ public class PlanOptimizers
                         new RewriteFilterWithExternalFunctionToProject(metadata.getFunctionAndTypeManager()),
                         new PlanRemoteProjections(metadata.getFunctionAndTypeManager()))));
 
+        // Run before connector optimizers can absorb row predicates into table layouts.
+        // This rewrite needs explicit filtered and unfiltered scans of the same fact table.
+        builder.add(new IterativeOptimizer(
+                metadata,
+                ruleStats,
+                statsCalculator,
+                estimatedExchangesCostCalculator,
+                Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
+                ImmutableSet.of(new TransformCountOverPairedNotEqualExistsToGroupedAggregation(metadata.getFunctionAndTypeManager()))));
+
         // Pass a supplier so that we pickup connector optimizers that are installed later
         builder.add(
                 new ApplyConnectorOptimization(() -> planOptimizerManager.getOptimizers(LOGICAL)),
