@@ -1080,6 +1080,11 @@ public class TransformCountOverPairedNotEqualExistsToGroupedAggregation
             VariableReferenceExpression min,
             VariableReferenceExpression max)
     {
+        Optional<VariableReferenceExpression> direct = extractCoalescedMinMaxNotEqual(expression, min, max);
+        if (direct.isPresent()) {
+            return direct;
+        }
+
         if (!(expression instanceof CallExpression)) {
             return Optional.empty();
         }
