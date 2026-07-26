@@ -84,6 +84,8 @@ import static com.facebook.presto.spi.page.PagesSerdeUtil.readSerializedPage;
 import static jakarta.ws.rs.core.HttpHeaders.CACHE_CONTROL;
 import static jakarta.ws.rs.core.HttpHeaders.CONTENT_TYPE;
 import static jakarta.ws.rs.core.MediaType.APPLICATION_JSON;
+import static jakarta.ws.rs.core.Response.Status.NO_CONTENT;
+import static jakarta.ws.rs.core.Response.Status.NOT_FOUND;
 import static jakarta.ws.rs.core.Response.Status.OK;
 import static java.lang.Integer.parseInt;
 import static java.lang.String.format;
@@ -433,6 +435,30 @@ public class TestServer
         StatusResponseHandler.StatusResponse response = client.execute(request, createStatusResponseHandler());
         assertEquals(response.getStatusCode(), OK.getStatusCode(), "Status code");
         assertEquals(response.getHeader(CONTENT_TYPE), APPLICATION_JSON, "Content Type");
+    }
+
+    @Test
+    public void testHeadTaskResultsBeforeOutputBufferInitialization()
+    {
+        QueryId queryId = new QueryIdGenerator().createNextQueryId();
+        Request request = prepareHead()
+                .setUri(uriFor(format("/v1/task/%s.0.0.0.0/results/0/0", queryId)))
+                .build();
+
+        StatusResponseHandler.StatusResponse response = client.execute(request, createStatusResponseHandler());
+        assertEquals(response.getStatusCode(), NOT_FOUND.getStatusCode());
+    }
+
+    @Test
+    public void testAcknowledgeInitialTokenBeforeOutputBufferInitialization()
+    {
+        QueryId queryId = new QueryIdGenerator().createNextQueryId();
+        Request request = prepareGet()
+                .setUri(uriFor(format("/v1/task/%s.0.0.0.0/results/0/0/acknowledge", queryId)))
+                .build();
+
+        StatusResponseHandler.StatusResponse response = client.execute(request, createStatusResponseHandler());
+        assertEquals(response.getStatusCode(), NO_CONTENT.getStatusCode());
     }
 
     @Test
