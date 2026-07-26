@@ -25,6 +25,7 @@ import org.testng.annotations.Test;
 
 import java.util.Optional;
 
+import static com.facebook.presto.SystemSessionProperties.JOINS_NOT_NULL_INFERENCE_STRATEGY;
 import static com.facebook.presto.SystemSessionProperties.PUSH_AGGREGATION_THROUGH_JOIN;
 import static com.facebook.presto.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
 import static org.testng.Assert.assertEquals;
@@ -36,6 +37,11 @@ public class TestHivePairedExistsAggregationRewrite
     private static final String TABLE_NAME = "test_paired_exists_fact";
     private static final String NULLABLE_TABLE_NAME = "test_paired_exists_nullable_fact";
     private static final String QUERY = pairedExistsQuery(TABLE_NAME);
+    private static final String Q21_LINEITEM_TABLE_NAME = "test_paired_exists_q21_lineitem";
+    private static final String Q21_SUPPLIER_TABLE_NAME = "test_paired_exists_q21_supplier";
+    private static final String Q21_ORDERS_TABLE_NAME = "test_paired_exists_q21_orders";
+    private static final String Q21_NATION_TABLE_NAME = "test_paired_exists_q21_nation";
+    private static final String Q21_QUERY = q21Query();
 
     @Override
     protected QueryRunner createQueryRunner()
@@ -106,6 +112,94 @@ public class TestHivePairedExistsAggregationRewrite
         }
     }
 
+    @Test
+    public void testCanonicalQ21RewriteSurvivesInferredNotNullAndConnectorFilterPushdown()
+    {
+        try {
+            assertUpdate("CREATE TABLE " + Q21_NATION_TABLE_NAME + " (" +
+                    "nationkey BIGINT NOT NULL, " +
+                    "name VARCHAR NOT NULL, " +
+                    "CONSTRAINT test_q21_nation_pk PRIMARY KEY (nationkey) DISABLED RELY NOT ENFORCED) " +
+                    "WITH (format = 'PARQUET')");
+            assertUpdate("CREATE TABLE " + Q21_SUPPLIER_TABLE_NAME + " (" +
+                    "suppkey BIGINT NOT NULL, " +
+                    "name VARCHAR NOT NULL, " +
+                    "nationkey BIGINT NOT NULL, " +
+                    "CONSTRAINT test_q21_supplier_pk PRIMARY KEY (suppkey) DISABLED RELY NOT ENFORCED) " +
+                    "WITH (format = 'PARQUET')");
+            assertUpdate("CREATE TABLE " + Q21_ORDERS_TABLE_NAME + " (" +
+                    "orderkey BIGINT NOT NULL, " +
+                    "orderstatus VARCHAR NOT NULL, " +
+                    "CONSTRAINT test_q21_orders_pk PRIMARY KEY (orderkey) DISABLED RELY NOT ENFORCED) " +
+                    "WITH (format = 'PARQUET')");
+            assertUpdate("CREATE TABLE " + Q21_LINEITEM_TABLE_NAME + " (" +
+                    "orderkey BIGINT NOT NULL, " +
+                    "suppkey BIGINT NOT NULL, " +
+                    "receiptdate DATE NOT NULL, " +
+                    "commitdate DATE NOT NULL) " +
+                    "WITH (format = 'PARQUET')");
+
+            assertUpdate("INSERT INTO " + Q21_NATION_TABLE_NAME + " VALUES " +
+                    "(1, 'SAUDI ARABIA'), " +
+                    "(2, 'CANADA')",
+                    2);
+            assertUpdate("INSERT INTO " + Q21_SUPPLIER_TABLE_NAME + " VALUES " +
+                    "(10, 'Supplier#10', 1), " +
+                    "(20, 'Supplier#20', 1), " +
+                    "(30, 'Supplier#30', 2)",
+                    3);
+            assertUpdate("INSERT INTO " + Q21_ORDERS_TABLE_NAME + " VALUES " +
+                    "(1, 'F'), " +
+                    "(2, 'F'), " +
+                    "(3, 'F'), " +
+                    "(4, 'O'), " +
+                    "(5, 'F'), " +
+                    "(6, 'F')",
+                    6);
+            assertUpdate("INSERT INTO " + Q21_LINEITEM_TABLE_NAME + " VALUES " +
+                    "(1, 10, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(1, 10, DATE '1995-01-03', DATE '1995-01-01'), " +
+                    "(1, 20, DATE '1995-01-01', DATE '1995-01-02'), " +
+                    "(2, 10, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(2, 20, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(3, 10, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(4, 10, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(4, 20, DATE '1995-01-01', DATE '1995-01-02'), " +
+                    "(5, 30, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(5, 20, DATE '1995-01-01', DATE '1995-01-02'), " +
+                    "(6, 20, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(6, 10, DATE '1995-01-01', DATE '1995-01-02')",
+                    12);
+
+            // Keep execution independent of the Java Parquet reader's support
+            // for complex pushed filters, while planning with both pushdowns
+            // and inferred NOT NULL filters enabled to exercise the production
+            // Q21 optimizer ordering.
+            Session optimized = q21Session(true, false);
+            Session baseline = q21Session(false, false);
+            assertQueryWithSameQueryRunner(optimized, Q21_QUERY, baseline);
+            assertQueryOrdered(
+                    optimized,
+                    Q21_QUERY,
+                    "VALUES ('Supplier#10', CAST(2 AS BIGINT)), ('Supplier#20', CAST(1 AS BIGINT))");
+            assertEquals(
+                    countTableScans(plan(Q21_QUERY, optimized), Q21_LINEITEM_TABLE_NAME),
+                    1);
+            assertEquals(
+                    countTableScans(plan(Q21_QUERY, baseline), Q21_LINEITEM_TABLE_NAME),
+                    3);
+            assertEquals(
+                    countTableScans(plan(Q21_QUERY, q21Session(true, true)), Q21_LINEITEM_TABLE_NAME),
+                    1);
+        }
+        finally {
+            assertUpdate("DROP TABLE IF EXISTS " + Q21_LINEITEM_TABLE_NAME);
+            assertUpdate("DROP TABLE IF EXISTS " + Q21_ORDERS_TABLE_NAME);
+            assertUpdate("DROP TABLE IF EXISTS " + Q21_SUPPLIER_TABLE_NAME);
+            assertUpdate("DROP TABLE IF EXISTS " + Q21_NATION_TABLE_NAME);
+        }
+    }
+
     private Session session(boolean pushAggregationThroughJoin, boolean pushdownFilter)
     {
         return Session.builder(getSession())
@@ -115,10 +209,25 @@ public class TestHivePairedExistsAggregationRewrite
                 .build();
     }
 
+    private Session q21Session(boolean pushAggregationThroughJoin, boolean pushdownFilter)
+    {
+        return Session.builder(session(pushAggregationThroughJoin, pushdownFilter))
+                .setSystemProperty(JOINS_NOT_NULL_INFERENCE_STRATEGY, "USE_FUNCTION_METADATA")
+                .build();
+    }
+
     private static int countTableScans(Plan plan)
     {
         return searchFrom(plan.getRoot())
                 .where(TableScanNode.class::isInstance)
+                .count();
+    }
+
+    private static int countTableScans(Plan plan, String tableName)
+    {
+        return searchFrom(plan.getRoot())
+                .where(node -> node instanceof TableScanNode &&
+                        ((HiveTableHandle) ((TableScanNode) node).getTable().getConnectorHandle()).getTableName().equals(tableName))
                 .count();
     }
 
@@ -136,5 +245,32 @@ public class TestHivePairedExistsAggregationRewrite
                 "    WHERE l3.orderkey = l1.orderkey " +
                 "      AND l3.suppkey <> l1.suppkey " +
                 "      AND l3.receiptdate > l3.commitdate)";
+    }
+
+    private static String q21Query()
+    {
+        return "SELECT s.name, count(*) AS numwait " +
+                "FROM " + Q21_SUPPLIER_TABLE_NAME + " s, " +
+                Q21_LINEITEM_TABLE_NAME + " l1, " +
+                Q21_ORDERS_TABLE_NAME + " o, " +
+                Q21_NATION_TABLE_NAME + " n " +
+                "WHERE s.suppkey = l1.suppkey " +
+                "AND o.orderkey = l1.orderkey " +
+                "AND o.orderstatus = 'F' " +
+                "AND l1.receiptdate > l1.commitdate " +
+                "AND EXISTS (" +
+                "    SELECT * FROM " + Q21_LINEITEM_TABLE_NAME + " l2 " +
+                "    WHERE l2.orderkey = l1.orderkey " +
+                "      AND l2.suppkey <> l1.suppkey) " +
+                "AND NOT EXISTS (" +
+                "    SELECT * FROM " + Q21_LINEITEM_TABLE_NAME + " l3 " +
+                "    WHERE l3.orderkey = l1.orderkey " +
+                "      AND l3.suppkey <> l1.suppkey " +
+                "      AND l3.receiptdate > l3.commitdate) " +
+                "AND s.nationkey = n.nationkey " +
+                "AND n.name = 'SAUDI ARABIA' " +
+                "GROUP BY s.name " +
+                "ORDER BY numwait DESC, s.name " +
+                "LIMIT 100";
     }
 }
