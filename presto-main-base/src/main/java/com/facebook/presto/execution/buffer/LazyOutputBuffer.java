@@ -219,7 +219,12 @@ public class LazyOutputBuffer
     @Override
     public void acknowledge(OutputBufferId bufferId, long token)
     {
-        OutputBuffer outputBuffer = getDelegateOutputBufferOrFail();
+        OutputBuffer outputBuffer = getDelegateOutputBuffer();
+        if (outputBuffer == null) {
+            // The initial token acknowledges no pages and can arrive before the buffer is initialized.
+            checkState(token == 0, "Buffer has not been initialized");
+            return;
+        }
         outputBuffer.acknowledge(bufferId, token);
     }
 
