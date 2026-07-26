@@ -64,6 +64,7 @@ import static com.facebook.presto.spi.plan.ProjectNode.Locality.LOCAL;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IF;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.OR;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.isIdentity;
 import static com.facebook.presto.sql.relational.Expressions.comparisonExpression;
 import static java.util.Collections.emptyMap;
 import static java.util.Objects.requireNonNull;
@@ -310,6 +311,13 @@ public class TransformCountOverPairedNotEqualExistsToGroupedAggregation
     private Optional<MinMaxFacts> extractMinMaxFacts(PlanNode node, Context context)
     {
         node = context.getLookup().resolve(node);
+        while (node instanceof ProjectNode) {
+            ProjectNode project = (ProjectNode) node;
+            if (!isIdentity(project.getAssignments())) {
+                return Optional.empty();
+            }
+            node = context.getLookup().resolve(project.getSource());
+        }
         if (!(node instanceof AggregationNode)) {
             return Optional.empty();
         }
@@ -339,16 +347,16 @@ public class TransformCountOverPairedNotEqualExistsToGroupedAggregation
             }
 
             VariableReferenceExpression argument = (VariableReferenceExpression) aggregate.getArguments().get(0);
+            if (value.isPresent() && !value.get().equals(argument)) {
+                return Optional.empty();
+            }
+            value = Optional.of(argument);
+
             if (functionResolution.isMinFunction(aggregate.getFunctionHandle())) {
                 minOutput = Optional.of(entry.getKey());
-                value = Optional.of(argument);
             }
             else if (functionResolution.isMaxFunction(aggregate.getFunctionHandle())) {
                 maxOutput = Optional.of(entry.getKey());
-                if (value.isPresent() && !value.get().equals(argument)) {
-                    return Optional.empty();
-                }
-                value = Optional.of(argument);
             }
             else {
                 return Optional.empty();
@@ -377,8 +385,11 @@ public class TransformCountOverPairedNotEqualExistsToGroupedAggregation
     private Optional<FactsJoin> extractOuterFactsJoin(JoinNode join, Context context)
     {
         if ((join.getType() != JoinType.LEFT && join.getType() != JoinType.RIGHT)
-                || join.getCriteria().size() != 1
-                || join.getFilter().isPresent()) {
+                || join.getCriteria().size() != 1) {
+            return Optional.empty();
+        }
+
+        if (!semanticJoinFilterConjuncts(join).isEmpty()) {
             return Optional.empty();
         }
 
@@ -414,6 +425,12 @@ public class TransformCountOverPairedNotEqualExistsToGroupedAggregation
             return Optional.empty();
         }
 
+        List<RowExpression> semanticFilterConjuncts = semanticJoinFilterConjuncts(join);
+        if (semanticFilterConjuncts.size() != 1) {
+            return Optional.empty();
+        }
+        Optional<RowExpression> semanticFilter = Optional.of(semanticFilterConjuncts.get(0));
+
         EquiJoinClause clause = join.getCriteria().get(0);
         Optional<MinMaxFacts> leftFacts = extractMinMaxFacts(join.getLeft(), context);
         Optional<MinMaxFacts> rightFacts = extractMinMaxFacts(join.getRight(), context);
@@ -425,13 +442,39 @@ public class TransformCountOverPairedNotEqualExistsToGroupedAggregation
             if (!clause.getLeft().equals(leftFacts.get().getKey())) {
                 return Optional.empty();
             }
-            return Optional.of(new FactsJoin(join, leftFacts.get(), context.getLookup().resolve(join.getRight()), clause.getRight(), join.getFilter()));
+            return Optional.of(new FactsJoin(join, leftFacts.get(), context.getLookup().resolve(join.getRight()), clause.getRight(), semanticFilter));
         }
 
         if (!clause.getRight().equals(rightFacts.get().getKey())) {
             return Optional.empty();
         }
-        return Optional.of(new FactsJoin(join, rightFacts.get(), context.getLookup().resolve(join.getLeft()), clause.getLeft(), join.getFilter()));
+        return Optional.of(new FactsJoin(join, rightFacts.get(), context.getLookup().resolve(join.getLeft()), clause.getLeft(), semanticFilter));
+    }
+
+    private List<RowExpression> semanticJoinFilterConjuncts(JoinNode join)
+    {
+        if (!join.getFilter().isPresent()) {
+            return ImmutableList.of();
+        }
+
+        // AddNotNullFiltersToJoinNode appends this exact predicate for equi-join
+        // keys. A null equi-join key cannot match, so these conjuncts do not
+        // change the join semantics. Preserve every other filter conjunct for
+        // the shape-specific checks below.
+        ImmutableList.Builder<VariableReferenceExpression> joinKeys = ImmutableList.builder();
+        for (EquiJoinClause clause : join.getCriteria()) {
+            joinKeys.add(clause.getLeft());
+            joinKeys.add(clause.getRight());
+        }
+        List<VariableReferenceExpression> equiJoinVariables = joinKeys.build();
+
+        List<RowExpression> conjuncts = new ArrayList<>();
+        collectConjuncts(join.getFilter().get(), conjuncts);
+        conjuncts.removeIf(conjunct -> isTrueConstant(conjunct)
+                || extractNotNullVariable(conjunct)
+                        .map(equiJoinVariables::contains)
+                        .orElse(false));
+        return conjuncts;
     }
 
     private Optional<FactsJoin> findInnerFactsJoin(PlanNode node, Context context)
@@ -617,21 +660,30 @@ public class TransformCountOverPairedNotEqualExistsToGroupedAggregation
 
     private boolean isRedundantKnownNonNull(RowExpression expression, TableScanNode scan)
     {
+        return extractNotNullVariable(expression)
+                .map(variable -> isKnownNonNull(scan, variable))
+                .orElse(false);
+    }
+
+    private Optional<VariableReferenceExpression> extractNotNullVariable(RowExpression expression)
+    {
         if (!(expression instanceof CallExpression)) {
-            return false;
+            return Optional.empty();
         }
         CallExpression call = (CallExpression) expression;
         if (!functionResolution.isNotFunction(call.getFunctionHandle())
                 || call.getArguments().size() != 1
                 || !(call.getArguments().get(0) instanceof SpecialFormExpression)) {
-            return false;
+            return Optional.empty();
         }
 
         SpecialFormExpression isNull = (SpecialFormExpression) call.getArguments().get(0);
-        return isNull.getForm() == SpecialFormExpression.Form.IS_NULL
-                && isNull.getArguments().size() == 1
-                && isNull.getArguments().get(0) instanceof VariableReferenceExpression
-                && isKnownNonNull(scan, (VariableReferenceExpression) isNull.getArguments().get(0));
+        if (isNull.getForm() != SpecialFormExpression.Form.IS_NULL
+                || isNull.getArguments().size() != 1
+                || !(isNull.getArguments().get(0) instanceof VariableReferenceExpression)) {
+            return Optional.empty();
+        }
+        return Optional.of((VariableReferenceExpression) isNull.getArguments().get(0));
     }
 
     private boolean isKnownNonNull(TableScanNode scan, VariableReferenceExpression variable)
