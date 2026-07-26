@@ -72,6 +72,7 @@ import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.expectThrows;
 
 @Test(singleThreaded = true)
 public class TestSqlTaskManager
@@ -150,6 +151,19 @@ public class TestSqlTaskManager
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
             taskInfo = sqlTaskManager.getTaskInfo(taskId);
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
+        }
+    }
+
+    @Test
+    public void testAcknowledgeBeforeOutputBufferInitialization()
+    {
+        try (SqlTaskManager sqlTaskManager = createSqlTaskManager(new TaskManagerConfig())) {
+            sqlTaskManager.acknowledgeTaskResults(TASK_ID, OUT, 0);
+
+            IllegalStateException exception = expectThrows(
+                    IllegalStateException.class,
+                    () -> sqlTaskManager.acknowledgeTaskResults(TASK_ID, OUT, 1));
+            assertEquals(exception.getMessage(), "Buffer has not been initialized");
         }
     }
 
