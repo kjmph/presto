@@ -14,7 +14,7 @@
 package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.cost.PlanNodeStatsEstimate;
-import com.facebook.presto.cost.TaskCountEstimator;
+import com.facebook.presto.cost.VariableStatsEstimate;
 import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
@@ -29,15 +29,18 @@ import static com.facebook.presto.SystemSessionProperties.JOIN_MAX_BROADCAST_TAB
 import static com.facebook.presto.SystemSessionProperties.PUSH_AGGREGATION_THROUGH_JOIN;
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.SINGLE;
 import static com.facebook.presto.spi.plan.JoinType.INNER;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.aggregation;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.equiJoinClause;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.expression;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.filter;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.functionCall;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.join;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.semiJoin;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.singleGroupingSet;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strictProject;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
 
 public class TestPushJoinKeyFilterBelowAggregation
@@ -46,7 +49,7 @@ public class TestPushJoinKeyFilterBelowAggregation
     @Test
     public void testPushesJoinKeyFilterBelowFilteredAggregation()
     {
-        tester().assertThat(new PushJoinKeyFilterBelowAggregation(getFunctionManager(), new TaskCountEstimator(() -> 4)))
+        tester().assertThat(new PushJoinKeyFilterBelowAggregation(getFunctionManager()))
                 .setSystemProperty(PUSH_AGGREGATION_THROUGH_JOIN, "true")
                 .on(p -> {
                     VariableReferenceExpression leftKey = p.variable("left_key", BIGINT);
@@ -93,9 +96,63 @@ public class TestPushJoinKeyFilterBelowAggregation
     }
 
     @Test
-    public void testDoesNotPushWhenFilteringSourceIsTooLargeToClone()
+    public void testUsesPerBuildJoinKeySizeWhenEstimatingClone()
     {
-        tester().assertThat(new PushJoinKeyFilterBelowAggregation(getFunctionManager(), new TaskCountEstimator(() -> 4)))
+        tester().assertThat(new PushJoinKeyFilterBelowAggregation(getFunctionManager()))
+                .setSystemProperty(PUSH_AGGREGATION_THROUGH_JOIN, "true")
+                .setSystemProperty(JOIN_MAX_BROADCAST_TABLE_SIZE, "10kB")
+                .on(p -> {
+                    VariableReferenceExpression leftKey = p.variable("left_key", BIGINT);
+                    VariableReferenceExpression quantity = p.variable("quantity", DOUBLE);
+                    VariableReferenceExpression avgValue = p.variable("avg_value", DOUBLE);
+                    VariableReferenceExpression rightKey = p.variable("right_key", BIGINT);
+                    VariableReferenceExpression unused = p.variable("unused", VARCHAR);
+
+                    return p.join(
+                            INNER,
+                            p.aggregation(aggregation -> aggregation
+                                    .source(p.values(new PlanNodeId("aggregation_source"), 100_000, leftKey, quantity))
+                                    .addAggregation(avgValue, p.rowExpression("avg(quantity)"))
+                                    .singleGroupingSet(leftKey)),
+                            p.values(new PlanNodeId("filtering_source"), 1_000, rightKey, unused),
+                            ImmutableList.of(new EquiJoinClause(leftKey, rightKey)),
+                            ImmutableList.of(leftKey, avgValue, rightKey, unused),
+                            Optional.empty(),
+                            Optional.empty(),
+                            Optional.empty());
+                })
+                .overrideStats("aggregation_source", PlanNodeStatsEstimate.builder()
+                        .setOutputRowCount(100_000)
+                        .build())
+                .overrideStats("filtering_source", PlanNodeStatsEstimate.builder()
+                        .setOutputRowCount(1_000)
+                        .addVariableStatistics(
+                                new VariableReferenceExpression(Optional.empty(), "unused", VARCHAR),
+                                VariableStatsEstimate.builder()
+                                        .setAverageRowSize(1_000)
+                                        .build())
+                        .build())
+                .matches(join(
+                        INNER,
+                        ImmutableList.of(equiJoinClause("left_key", "right_key")),
+                        aggregation(
+                                singleGroupingSet("left_key"),
+                                ImmutableMap.of(Optional.of("avg_value"), functionCall("avg", ImmutableList.of("quantity"))),
+                                ImmutableMap.of(),
+                                Optional.empty(),
+                                SINGLE,
+                                filter(semiJoin(
+                                        values("left_key", "quantity"),
+                                        strictProject(
+                                                ImmutableMap.of("cloned_right_key", expression("cloned_right_key")),
+                                                values("cloned_right_key", "cloned_unused"))))),
+                        values("right_key", "unused")));
+    }
+
+    @Test
+    public void testDoesNotPushWhenFilteringJoinKeyIsTooLargeToClone()
+    {
+        tester().assertThat(new PushJoinKeyFilterBelowAggregation(getFunctionManager()))
                 .setSystemProperty(PUSH_AGGREGATION_THROUGH_JOIN, "true")
                 .setSystemProperty(JOIN_MAX_BROADCAST_TABLE_SIZE, "5kB")
                 .on(p -> {

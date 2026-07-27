@@ -17,7 +17,6 @@ import com.facebook.presto.Session;
 import com.facebook.presto.common.type.BooleanType;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.cost.PlanNodeStatsEstimate;
-import com.facebook.presto.cost.TaskCountEstimator;
 import com.facebook.presto.expressions.RowExpressionRewriter;
 import com.facebook.presto.expressions.RowExpressionTreeRewriter;
 import com.facebook.presto.matching.Captures;
@@ -57,9 +56,9 @@ import static com.facebook.presto.SystemSessionProperties.shouldPushAggregationT
 import static com.facebook.presto.common.type.DoubleType.DOUBLE;
 import static com.facebook.presto.common.type.RealType.REAL;
 import static com.facebook.presto.matching.Pattern.typeOf;
+import static com.facebook.presto.sql.planner.iterative.rule.Util.restrictOutputs;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.Double.isNaN;
-import static java.lang.Math.max;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -104,13 +103,10 @@ public class PushJoinKeyFilterBelowAggregation
 
     private final FunctionAndTypeManager functionAndTypeManager;
     private final FunctionResolution functionResolution;
-    private final TaskCountEstimator taskCountEstimator;
-
-    public PushJoinKeyFilterBelowAggregation(FunctionAndTypeManager functionAndTypeManager, TaskCountEstimator taskCountEstimator)
+    public PushJoinKeyFilterBelowAggregation(FunctionAndTypeManager functionAndTypeManager)
     {
         this.functionAndTypeManager = requireNonNull(functionAndTypeManager, "functionAndTypeManager is null");
         this.functionResolution = new FunctionResolution(functionAndTypeManager.getFunctionAndTypeResolver());
-        this.taskCountEstimator = requireNonNull(taskCountEstimator, "taskCountEstimator is null");
     }
 
     @Override
@@ -172,7 +168,7 @@ public class PushJoinKeyFilterBelowAggregation
                 || !filteringSide.getOutputVariables().contains(filteringJoinKey)
                 || containsSemiJoin(aggregation.getSource(), context)
                 || !isFilteringSourceSelective(aggregation.getSource(), filteringSide, context)
-                || !isFilteringSourceCheapToClone(filteringSide, context)) {
+                || !isFilteringSourceCheapToClone(filteringSide, filteringJoinKey, context)) {
             return Optional.empty();
         }
 
@@ -188,13 +184,18 @@ public class PushJoinKeyFilterBelowAggregation
         if (!clonedFilteringJoinKey.isPresent()) {
             return Optional.empty();
         }
+        PlanNode clonedFilteringSource = restrictOutputs(
+                context.getIdAllocator(),
+                clonedFilteringSide.getPlan(),
+                ImmutableSet.of(clonedFilteringJoinKey.get()))
+                .orElse(clonedFilteringSide.getPlan());
 
         VariableReferenceExpression semiJoinOutput = context.getVariableAllocator().newVariable("aggregation_key_present", BooleanType.BOOLEAN);
         SemiJoinNode semiJoin = new SemiJoinNode(
                 aggregation.getSourceLocation(),
                 context.getIdAllocator().getNextId(),
                 aggregation.getSource(),
-                clonedFilteringSide.getPlan(),
+                clonedFilteringSource,
                 aggregationJoinKey,
                 clonedFilteringJoinKey.get(),
                 semiJoinOutput,
@@ -327,16 +328,22 @@ public class PushJoinKeyFilterBelowAggregation
         return aggregationSourceRows / filteringSourceRows >= MIN_SELECTIVITY_GAIN;
     }
 
-    private boolean isFilteringSourceCheapToClone(PlanNode filteringSource, Context context)
+    private boolean isFilteringSourceCheapToClone(
+            PlanNode filteringSource,
+            VariableReferenceExpression filteringJoinKey,
+            Context context)
     {
         PlanNodeStatsEstimate filteringSourceStats = context.getStatsProvider().getStats(filteringSource);
-        double filteringSourceSizeInBytes = filteringSourceStats.getOutputSizeInBytes(filteringSource);
-        if (isNaN(filteringSourceSizeInBytes)) {
+        // The cloned source is projected to the semi-join key. Pricing unrelated outputs
+        // can reject a cheap key-only build solely because the original join needs payload.
+        double filteringJoinKeySizeInBytes = filteringSourceStats.getOutputSizeForVariables(ImmutableList.of(filteringJoinKey));
+        if (isNaN(filteringJoinKeySizeInBytes)) {
             return false;
         }
 
-        double replicatedFilteringSourceSizeInBytes = filteringSourceSizeInBytes * max(1, taskCountEstimator.estimateSourceDistributedTaskCount());
-        return replicatedFilteringSourceSizeInBytes <= getJoinMaxBroadcastTableSize(context.getSession()).toBytes();
+        // Match the standard join-distribution guard: the broadcast limit applies
+        // to one copy of the build, not the sum of copies across the cluster.
+        return filteringJoinKeySizeInBytes <= getJoinMaxBroadcastTableSize(context.getSession()).toBytes();
     }
 
     private boolean containsSemiJoin(PlanNode node, Context context)
