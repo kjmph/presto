@@ -14,8 +14,12 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.spi.plan.AggregationNode;
+import com.facebook.presto.spi.plan.JoinNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.sql.planner.Plan;
+import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.testing.QueryRunner;
 import com.facebook.presto.tests.AbstractTestQueryFramework;
 import com.google.common.collect.ImmutableList;
@@ -26,9 +30,15 @@ import org.testng.annotations.Test;
 import java.util.Optional;
 
 import static com.facebook.presto.SystemSessionProperties.JOINS_NOT_NULL_INFERENCE_STRATEGY;
+import static com.facebook.presto.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
+import static com.facebook.presto.SystemSessionProperties.PARTIAL_AGGREGATION_STRATEGY;
 import static com.facebook.presto.SystemSessionProperties.PUSH_AGGREGATION_THROUGH_JOIN;
+import static com.facebook.presto.SystemSessionProperties.PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN;
+import static com.facebook.presto.spi.plan.AggregationNode.Step.PARTIAL;
 import static com.facebook.presto.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertTrue;
 
 @Test(singleThreaded = true)
 public class TestHivePairedExistsAggregationRewrite
@@ -191,6 +201,11 @@ public class TestHivePairedExistsAggregationRewrite
             assertEquals(
                     countTableScans(plan(Q21_QUERY, q21Session(true, true)), Q21_LINEITEM_TABLE_NAME),
                     1);
+
+            Plan partialPushdownDisabled = plan(Q21_QUERY, q21PartitionedSession(false));
+            Plan partialPushdownEnabled = plan(Q21_QUERY, q21PartitionedSession(true));
+            assertFalse(hasPartialAggregationBelowOrdersJoinAndExchange(partialPushdownDisabled));
+            assertTrue(hasPartialAggregationBelowOrdersJoinAndExchange(partialPushdownEnabled));
         }
         finally {
             assertUpdate("DROP TABLE IF EXISTS " + Q21_LINEITEM_TABLE_NAME);
@@ -216,6 +231,15 @@ public class TestHivePairedExistsAggregationRewrite
                 .build();
     }
 
+    private Session q21PartitionedSession(boolean pushPartialAggregationThroughJoin)
+    {
+        return Session.builder(q21Session(true, true))
+                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, "PARTITIONED")
+                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "ALWAYS")
+                .setSystemProperty(PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN, String.valueOf(pushPartialAggregationThroughJoin))
+                .build();
+    }
+
     private static int countTableScans(Plan plan)
     {
         return searchFrom(plan.getRoot())
@@ -229,6 +253,48 @@ public class TestHivePairedExistsAggregationRewrite
                 .where(node -> node instanceof TableScanNode &&
                         ((HiveTableHandle) ((TableScanNode) node).getTable().getConnectorHandle()).getTableName().equals(tableName))
                 .count();
+    }
+
+    private static boolean hasPartialAggregationBelowOrdersJoinAndExchange(Plan plan)
+    {
+        JoinNode ordersJoin = searchFrom(plan.getRoot())
+                .where(node -> node instanceof JoinNode && isLineitemOrdersJoin((JoinNode) node))
+                .<JoinNode>findFirst()
+                .orElseThrow(() -> new AssertionError("lineitem-orders join not found"));
+        PlanNode lineitemSource = containsTable(ordersJoin.getLeft(), Q21_LINEITEM_TABLE_NAME) ?
+                ordersJoin.getLeft() :
+                ordersJoin.getRight();
+        return searchFrom(lineitemSource)
+                .where(node -> node instanceof ExchangeNode && ((ExchangeNode) node).getScope().isRemote() &&
+                        node.getSources().stream().anyMatch(source ->
+                                containsTable(source, Q21_LINEITEM_TABLE_NAME) &&
+                                        containsPartialAggregation(source)))
+                .matches();
+    }
+
+    private static boolean containsPartialAggregation(PlanNode root)
+    {
+        return searchFrom(root)
+                .where(node -> node instanceof AggregationNode && ((AggregationNode) node).getStep() == PARTIAL)
+                .matches();
+    }
+
+    private static boolean isLineitemOrdersJoin(JoinNode join)
+    {
+        boolean leftHasLineitem = containsTable(join.getLeft(), Q21_LINEITEM_TABLE_NAME);
+        boolean leftHasOrders = containsTable(join.getLeft(), Q21_ORDERS_TABLE_NAME);
+        boolean rightHasLineitem = containsTable(join.getRight(), Q21_LINEITEM_TABLE_NAME);
+        boolean rightHasOrders = containsTable(join.getRight(), Q21_ORDERS_TABLE_NAME);
+        return (leftHasLineitem && !leftHasOrders && rightHasOrders && !rightHasLineitem) ||
+                (rightHasLineitem && !rightHasOrders && leftHasOrders && !leftHasLineitem);
+    }
+
+    private static boolean containsTable(PlanNode root, String tableName)
+    {
+        return searchFrom(root)
+                .where(node -> node instanceof TableScanNode &&
+                        ((HiveTableHandle) ((TableScanNode) node).getTable().getConnectorHandle()).getTableName().equals(tableName))
+                .matches();
     }
 
     private static String pairedExistsQuery(String tableName)

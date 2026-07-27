@@ -21,6 +21,7 @@ import com.facebook.presto.execution.warnings.DefaultWarningCollector;
 import com.facebook.presto.execution.warnings.WarningCollectorConfig;
 import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.plan.AggregationNode;
+import com.facebook.presto.spi.plan.Assignments;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.assertions.BasePlanTest;
@@ -46,6 +47,7 @@ import static com.facebook.presto.spi.statistics.SourceInfo.ConfidenceLevel.LOW;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.aggregation;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.anyTree;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.exchange;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.expression;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.functionCall;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.project;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.tableScan;
@@ -96,6 +98,42 @@ public class TestPushPartialAggregationThroughExchange
                                         ImmutableMap.of("SUM", functionCall("sum", ImmutableList.of("a"))),
                                         PARTIAL,
                                         values("a")))));
+    }
+
+    @Test
+    public void testPartialAggregationPushedThroughProjectionAndExchange()
+    {
+        PushPartialAggregationThroughExchange rule = new PushPartialAggregationThroughExchange(getFunctionManager(), false);
+        tester().assertThat(rule.pushPartialAggregationThroughExchangeWithProjection())
+                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "ALWAYS")
+                .on(p -> {
+                    VariableReferenceExpression a = p.variable("a", DOUBLE);
+                    VariableReferenceExpression b = p.variable("b", DOUBLE);
+                    VariableReferenceExpression expression = p.variable("expression", DOUBLE);
+                    return p.aggregation(ab -> ab
+                            .source(p.project(
+                                    Assignments.builder()
+                                            .put(a, a)
+                                            .put(expression, p.rowExpression("b + b"))
+                                            .build(),
+                                    p.exchange(e -> e
+                                            .addSource(p.values(a, b))
+                                            .addInputsSet(a, b)
+                                            .fixedHashDistributionPartitioningScheme(ImmutableList.of(a, b), ImmutableList.of(a)))))
+                            .addAggregation(p.variable("SUM", DOUBLE), p.rowExpression("SUM(expression)"))
+                            .singleGroupingSet(a)
+                            .step(PARTIAL));
+                })
+                .matches(exchange(
+                        project(
+                                aggregation(
+                                        ImmutableMap.of("SUM", functionCall("sum", ImmutableList.of("expression"))),
+                                        PARTIAL,
+                                        project(
+                                                ImmutableMap.of(
+                                                        "a", expression("a"),
+                                                        "expression", expression("b + b")),
+                                                values("a", "b"))))));
     }
 
     @Test
