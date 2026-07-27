@@ -33,8 +33,11 @@ import static com.facebook.presto.SystemSessionProperties.JOINS_NOT_NULL_INFEREN
 import static com.facebook.presto.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
 import static com.facebook.presto.SystemSessionProperties.PARTIAL_AGGREGATION_STRATEGY;
 import static com.facebook.presto.SystemSessionProperties.PUSH_AGGREGATION_THROUGH_JOIN;
+import static com.facebook.presto.SystemSessionProperties.PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN;
 import static com.facebook.presto.SystemSessionProperties.PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN;
+import static com.facebook.presto.spi.plan.AggregationNode.Step.FINAL;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.PARTIAL;
+import static com.facebook.presto.spi.plan.AggregationNode.Step.SINGLE;
 import static com.facebook.presto.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
@@ -206,6 +209,19 @@ public class TestHivePairedExistsAggregationRewrite
             Plan partialPushdownEnabled = plan(Q21_QUERY, q21PartitionedSession(true));
             assertFalse(hasPartialAggregationBelowOrdersJoinAndExchange(partialPushdownDisabled));
             assertTrue(hasPartialAggregationBelowOrdersJoinAndExchange(partialPushdownEnabled));
+
+            Session uniqueLookupPushdownDisabledExecution = q21UniqueLookupAggregationSession(false, false);
+            Session uniqueLookupPushdownEnabledExecution = q21UniqueLookupAggregationSession(true, false);
+            assertQueryWithSameQueryRunner(uniqueLookupPushdownEnabledExecution, Q21_QUERY, uniqueLookupPushdownDisabledExecution);
+
+            Plan uniqueLookupPushdownDisabled = plan(Q21_QUERY, q21UniqueLookupAggregationSession(false, true));
+            Plan uniqueLookupPushdownEnabled = plan(Q21_QUERY, q21UniqueLookupAggregationSession(true, true));
+            assertEquals(countTableScans(uniqueLookupPushdownDisabled, Q21_LINEITEM_TABLE_NAME), 1);
+            assertEquals(countTableScans(uniqueLookupPushdownEnabled, Q21_LINEITEM_TABLE_NAME), 1);
+            assertOrdersJoinAndFilterRetained(uniqueLookupPushdownDisabled);
+            assertOrdersJoinAndFilterRetained(uniqueLookupPushdownEnabled);
+            assertFalse(hasCompleteAggregationBelowOrdersJoin(uniqueLookupPushdownDisabled));
+            assertTrue(hasCompleteAggregationBelowOrdersJoin(uniqueLookupPushdownEnabled));
         }
         finally {
             assertUpdate("DROP TABLE IF EXISTS " + Q21_LINEITEM_TABLE_NAME);
@@ -240,6 +256,16 @@ public class TestHivePairedExistsAggregationRewrite
                 .build();
     }
 
+    private Session q21UniqueLookupAggregationSession(boolean pushAggregationThroughUniqueLookupJoin, boolean pushdownFilter)
+    {
+        return Session.builder(q21Session(true, pushdownFilter))
+                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, "PARTITIONED")
+                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "NEVER")
+                .setSystemProperty(PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN, "false")
+                .setSystemProperty(PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN, String.valueOf(pushAggregationThroughUniqueLookupJoin))
+                .build();
+    }
+
     private static int countTableScans(Plan plan)
     {
         return searchFrom(plan.getRoot())
@@ -257,10 +283,7 @@ public class TestHivePairedExistsAggregationRewrite
 
     private static boolean hasPartialAggregationBelowOrdersJoinAndExchange(Plan plan)
     {
-        JoinNode ordersJoin = searchFrom(plan.getRoot())
-                .where(node -> node instanceof JoinNode && isLineitemOrdersJoin((JoinNode) node))
-                .<JoinNode>findFirst()
-                .orElseThrow(() -> new AssertionError("lineitem-orders join not found"));
+        JoinNode ordersJoin = findLineitemOrdersJoin(plan);
         PlanNode lineitemSource = containsTable(ordersJoin.getLeft(), Q21_LINEITEM_TABLE_NAME) ?
                 ordersJoin.getLeft() :
                 ordersJoin.getRight();
@@ -270,6 +293,39 @@ public class TestHivePairedExistsAggregationRewrite
                                 containsTable(source, Q21_LINEITEM_TABLE_NAME) &&
                                         containsPartialAggregation(source)))
                 .matches();
+    }
+
+    private static void assertOrdersJoinAndFilterRetained(Plan plan)
+    {
+        findLineitemOrdersJoin(plan);
+
+        TableScanNode ordersScan = searchFrom(plan.getRoot())
+                .where(node -> node instanceof TableScanNode &&
+                        ((HiveTableHandle) ((TableScanNode) node).getTable().getConnectorHandle()).getTableName().equals(Q21_ORDERS_TABLE_NAME))
+                .<TableScanNode>findOnlyElement();
+        assertTrue(ordersScan.getTable().getLayout().isPresent());
+        HiveTableLayoutHandle layout = (HiveTableLayoutHandle) ordersScan.getTable().getLayout().get();
+        assertTrue(layout.getPredicateColumns().containsKey("orderstatus"));
+    }
+
+    private static boolean hasCompleteAggregationBelowOrdersJoin(Plan plan)
+    {
+        JoinNode ordersJoin = findLineitemOrdersJoin(plan);
+        PlanNode lineitemSource = containsTable(ordersJoin.getLeft(), Q21_LINEITEM_TABLE_NAME) ?
+                ordersJoin.getLeft() :
+                ordersJoin.getRight();
+        return searchFrom(lineitemSource)
+                .where(node -> node instanceof AggregationNode &&
+                        (((AggregationNode) node).getStep() == SINGLE || ((AggregationNode) node).getStep() == FINAL))
+                .matches();
+    }
+
+    private static JoinNode findLineitemOrdersJoin(Plan plan)
+    {
+        return searchFrom(plan.getRoot())
+                .where(node -> node instanceof JoinNode && isLineitemOrdersJoin((JoinNode) node))
+                .<JoinNode>findFirst()
+                .orElseThrow(() -> new AssertionError("lineitem-orders join not found"));
     }
 
     private static boolean containsPartialAggregation(PlanNode root)
