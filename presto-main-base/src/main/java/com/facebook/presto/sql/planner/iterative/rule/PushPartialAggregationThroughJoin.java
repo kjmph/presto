@@ -41,6 +41,7 @@ import java.util.stream.Collectors;
 import static com.facebook.presto.SystemSessionProperties.isPushAggregationThroughJoin;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.PARTIAL;
 import static com.facebook.presto.spi.plan.AggregationNode.singleGroupingSet;
+import static com.facebook.presto.spi.plan.JoinDistributionType.PARTITIONED;
 import static com.facebook.presto.sql.planner.iterative.rule.PushProjectionThroughJoin.getJoinRequiredVariables;
 import static com.facebook.presto.sql.planner.iterative.rule.Util.restrictOutputs;
 import static com.facebook.presto.sql.planner.optimizations.AggregationNodeUtils.extractAggregationUniqueVariables;
@@ -254,6 +255,12 @@ public class PushPartialAggregationThroughJoin
                     context.getIdAllocator(),
                     determinismEvaluator);
             if (!projectedJoin.isPresent()) {
+                return Result.empty();
+            }
+            // This variant exposes a partial aggregation to the fact-side repartition exchange.
+            // Pushing it below a replicated join cannot reduce that shuffle and can aggregate rows
+            // that a selective join would otherwise discard.
+            if (!projectedJoin.get().getDistributionType().equals(Optional.of(PARTITIONED))) {
                 return Result.empty();
             }
 

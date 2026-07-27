@@ -15,6 +15,7 @@ package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.spi.plan.Assignments;
 import com.facebook.presto.spi.plan.EquiJoinClause;
+import com.facebook.presto.spi.plan.JoinDistributionType;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
@@ -28,6 +29,8 @@ import static com.facebook.presto.SystemSessionProperties.PUSH_PARTIAL_AGGREGATI
 import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.common.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.PARTIAL;
+import static com.facebook.presto.spi.plan.JoinDistributionType.PARTITIONED;
+import static com.facebook.presto.spi.plan.JoinDistributionType.REPLICATED;
 import static com.facebook.presto.spi.plan.JoinType.INNER;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.aggregation;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.equiJoinClause;
@@ -105,7 +108,8 @@ public class TestPushPartialAggregationThroughJoin
                                             p.values(rightEqui, rightNonEqui),
                                             ImmutableList.of(new EquiJoinClause(leftEqui, rightEqui)),
                                             ImmutableList.of(leftEqui, leftNonEqui, leftGroupBy, leftAggregation),
-                                            Optional.of(p.rowExpression("LEFT_NON_EQUI <= RIGHT_NON_EQUI")))))
+                                            Optional.of(p.rowExpression("LEFT_NON_EQUI <= RIGHT_NON_EQUI")))
+                                            .withDistributionType(PARTITIONED)))
                             .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("AVG(LEFT_AGGR_PROJECTED)"))
                             .singleGroupingSet(leftGroupBy)
                             .step(PARTIAL));
@@ -117,6 +121,7 @@ public class TestPushPartialAggregationThroughJoin
                                 INNER,
                                 ImmutableList.of(equiJoinClause("LEFT_EQUI", "RIGHT_EQUI")),
                                 Optional.of("LEFT_NON_EQUI <= RIGHT_NON_EQUI"),
+                                Optional.of(PARTITIONED),
                                 aggregation(
                                         singleGroupingSet("LEFT_GROUP_BY", "LEFT_EQUI", "LEFT_NON_EQUI"),
                                         ImmutableMap.of(Optional.of("AVG"), functionCall("avg", ImmutableList.of("LEFT_AGGR_PROJECTED"))),
@@ -135,6 +140,18 @@ public class TestPushPartialAggregationThroughJoin
                                                 "RIGHT_EQUI", PlanMatchPattern.expression("RIGHT_EQUI"),
                                                 "RIGHT_NON_EQUI", PlanMatchPattern.expression("RIGHT_NON_EQUI")),
                                         values("RIGHT_EQUI", "RIGHT_NON_EQUI")))));
+    }
+
+    @Test
+    public void testDoesNotPushPartialAggregationThroughProjectionAndReplicatedJoin()
+    {
+        assertProjectedJoinDistributionDoesNotFire(Optional.of(REPLICATED));
+    }
+
+    @Test
+    public void testDoesNotPushPartialAggregationThroughProjectionAndJoinWithoutDistribution()
+    {
+        assertProjectedJoinDistributionDoesNotFire(Optional.empty());
     }
 
     @Test
@@ -193,7 +210,8 @@ public class TestPushPartialAggregationThroughJoin
                                             INNER,
                                             p.values(leftEqui, leftAggregation),
                                             p.values(rightEqui, rightAggregation),
-                                            new EquiJoinClause(leftEqui, rightEqui))))
+                                            new EquiJoinClause(leftEqui, rightEqui))
+                                            .withDistributionType(PARTITIONED)))
                             .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("AVG(PROJECTED)"))
                             .globalGrouping()
                             .step(PARTIAL));
@@ -216,7 +234,8 @@ public class TestPushPartialAggregationThroughJoin
                                         INNER,
                                         p.values(p.variable("LEFT_EQUI")),
                                         p.values(p.variable("RIGHT_EQUI")),
-                                        new EquiJoinClause(p.variable("LEFT_EQUI"), p.variable("RIGHT_EQUI")))))
+                                        new EquiJoinClause(p.variable("LEFT_EQUI"), p.variable("RIGHT_EQUI")))
+                                        .withDistributionType(PARTITIONED)))
                         .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("AVG(PROJECTED)"))
                         .globalGrouping()
                         .step(PARTIAL)))
@@ -243,6 +262,39 @@ public class TestPushPartialAggregationThroughJoin
                                 Optional.of(p.variable("RIGHT_MASK", BOOLEAN)))
                         .globalGrouping()
                         .step(PARTIAL)))
+                .doesNotFire();
+    }
+
+    private void assertProjectedJoinDistributionDoesNotFire(Optional<JoinDistributionType> distributionType)
+    {
+        PushPartialAggregationThroughJoin rule = new PushPartialAggregationThroughJoin(getFunctionManager());
+        tester().assertThat(rule.pushPartialAggregationThroughJoinWithProjection())
+                .setSystemProperty(PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN, "true")
+                .on(p -> {
+                    VariableReferenceExpression leftKey = p.variable("LEFT_KEY");
+                    VariableReferenceExpression leftValue = p.variable("LEFT_VALUE");
+                    VariableReferenceExpression projectedValue = p.variable("PROJECTED_VALUE");
+                    VariableReferenceExpression rightKey = p.variable("RIGHT_KEY");
+                    return p.aggregation(ab -> ab
+                            .source(p.project(
+                                    Assignments.of(
+                                            projectedValue,
+                                            p.rowExpression("LEFT_VALUE + LEFT_VALUE")),
+                                    p.join(
+                                            INNER,
+                                            p.values(leftKey, leftValue),
+                                            p.values(rightKey),
+                                            ImmutableList.of(new EquiJoinClause(leftKey, rightKey)),
+                                            ImmutableList.of(leftValue),
+                                            Optional.empty(),
+                                            Optional.empty(),
+                                            Optional.empty(),
+                                            distributionType,
+                                            ImmutableMap.of())))
+                            .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("AVG(PROJECTED_VALUE)"))
+                            .globalGrouping()
+                            .step(PARTIAL));
+                })
                 .doesNotFire();
     }
 }

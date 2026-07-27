@@ -18,7 +18,6 @@ import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.iterative.properties.LogicalPropertiesProviderImpl;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
@@ -33,7 +32,6 @@ import java.util.Optional;
 
 import static com.facebook.presto.SystemSessionProperties.EXPLOIT_CONSTRAINTS;
 import static com.facebook.presto.SystemSessionProperties.PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN;
-import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.SINGLE;
 import static com.facebook.presto.spi.plan.JoinType.INNER;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.aggregation;
