@@ -191,6 +191,7 @@ public final class SystemSessionProperties
     public static final String PUSHDOWN_THROUGH_UNNEST = "pushdown_through_unnest";
     public static final String SIMPLIFY_AGGREGATIONS_OVER_CONSTANT = "simplify_aggregations_over_constant";
     public static final String PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN = "push_partial_aggregation_through_join";
+    public static final String PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN = "push_aggregation_through_unique_lookup_join";
     public static final String PRE_AGGREGATE_BEFORE_GROUPING_SETS = "pre_aggregate_before_grouping_sets";
     public static final String PUSH_PROJECTION_THROUGH_CROSS_JOIN = "push_projection_through_cross_join";
     public static final String PARSE_DECIMAL_LITERALS_AS_DOUBLE = "parse_decimal_literals_as_double";
@@ -1041,6 +1042,11 @@ public final class SystemSessionProperties
                         PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN,
                         "Push partial aggregations below joins",
                         featuresConfig.isPushPartialAggregationThroughJoin(),
+                        false),
+                booleanProperty(
+                        PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN,
+                        "Push complete aggregations below inner joins with a unique lookup side",
+                        featuresConfig.isPushAggregationThroughUniqueLookupJoin(),
                         false),
                 booleanProperty(
                         PRE_AGGREGATE_BEFORE_GROUPING_SETS,
@@ -3030,6 +3036,11 @@ public final class SystemSessionProperties
     public static boolean isPushAggregationThroughJoin(Session session)
     {
         return session.getSystemProperty(PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN, Boolean.class);
+    }
+
+    public static boolean isPushAggregationThroughUniqueLookupJoin(Session session)
+    {
+        return session.getSystemProperty(PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN, Boolean.class);
     }
 
     public static boolean isSimplifyAggregationsOverConstant(Session session)

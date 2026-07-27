@@ -108,6 +108,7 @@ import com.facebook.presto.sql.planner.iterative.rule.PullUpExpressionInLambdaRu
 import com.facebook.presto.sql.planner.iterative.rule.PushAggregationThroughCardinalityPreservingLookupJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushAggregationThroughDisjointUnion;
 import com.facebook.presto.sql.planner.iterative.rule.PushAggregationThroughOuterJoin;
+import com.facebook.presto.sql.planner.iterative.rule.PushAggregationThroughUniqueLookupJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushDownDereferences;
 import com.facebook.presto.sql.planner.iterative.rule.PushDownFilterExpressionEvaluationThroughCrossJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushFilterThroughSelectingAggregation;
@@ -1103,6 +1104,16 @@ public class PlanOptimizers
                 estimatedExchangesCostCalculator,
                 Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
                 ImmutableSet.of(new TransformRepeatedScalarSumToGroupedScalarFilter(metadata.getFunctionAndTypeManager()))));
+
+        // Run after the post-Reorder transformations have exposed complete fact-key
+        // aggregations, but before join distribution and exchange planning.
+        builder.add(new IterativeOptimizer(
+                metadata,
+                ruleStats,
+                statsCalculator,
+                estimatedExchangesCostCalculator,
+                Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
+                ImmutableSet.copyOf(new PushAggregationThroughUniqueLookupJoin(metadata.getFunctionAndTypeManager()).rules())));
 
         builder.add(new IterativeOptimizer(
                 metadata,
