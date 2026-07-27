@@ -843,7 +843,7 @@ public class PlanOptimizers
                                 new PushGlobalSumThroughInnerJoin(metadata.getFunctionAndTypeManager()),
                                 new PushAggregationThroughCardinalityPreservingLookupJoin(metadata),
                                 new PushTopNThroughCardinalityPreservingJoin(metadata),
-                                new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager(), taskCountEstimator),
+                                new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager()),
                                 new PreAggregateCountThroughOuterJoin(metadata.getFunctionAndTypeManager()),
                                 new PushAggregationThroughOuterJoin(metadata.getFunctionAndTypeManager()))),
                 new IterativeOptimizer(
@@ -1093,7 +1093,7 @@ public class PlanOptimizers
                         new PushAggregationThroughCardinalityPreservingLookupJoin(metadata),
                         new PushTopNThroughCardinalityPreservingJoin(metadata),
                         new TransformCountOverPairedNotEqualExistsToGroupedAggregation(metadata.getFunctionAndTypeManager()),
-                        new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager(), taskCountEstimator),
+                        new PushJoinKeyFilterBelowAggregation(metadata.getFunctionAndTypeManager()),
                         new PreAggregateCountThroughOuterJoin(metadata.getFunctionAndTypeManager()),
                         new PushAggregationThroughOuterJoin(metadata.getFunctionAndTypeManager()))));
 
