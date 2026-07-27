@@ -207,8 +207,10 @@ public class TestHivePairedExistsAggregationRewrite
 
             Plan partialPushdownDisabled = plan(Q21_QUERY, q21PartitionedSession(false));
             Plan partialPushdownEnabled = plan(Q21_QUERY, q21PartitionedSession(true));
+            Plan partialPushdownReplicated = plan(Q21_QUERY, q21BroadcastSession(true));
             assertFalse(hasPartialAggregationBelowOrdersJoinAndExchange(partialPushdownDisabled));
             assertTrue(hasPartialAggregationBelowOrdersJoinAndExchange(partialPushdownEnabled));
+            assertFalse(hasPartialAggregationBelowOrdersJoinAndExchange(partialPushdownReplicated));
 
             Session uniqueLookupPushdownDisabledExecution = q21UniqueLookupAggregationSession(false, false);
             Session uniqueLookupPushdownEnabledExecution = q21UniqueLookupAggregationSession(true, false);
@@ -251,6 +253,15 @@ public class TestHivePairedExistsAggregationRewrite
     {
         return Session.builder(q21Session(true, true))
                 .setSystemProperty(JOIN_DISTRIBUTION_TYPE, "PARTITIONED")
+                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "ALWAYS")
+                .setSystemProperty(PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN, String.valueOf(pushPartialAggregationThroughJoin))
+                .build();
+    }
+
+    private Session q21BroadcastSession(boolean pushPartialAggregationThroughJoin)
+    {
+        return Session.builder(q21Session(true, true))
+                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, "BROADCAST")
                 .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "ALWAYS")
                 .setSystemProperty(PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN, String.valueOf(pushPartialAggregationThroughJoin))
                 .build();
