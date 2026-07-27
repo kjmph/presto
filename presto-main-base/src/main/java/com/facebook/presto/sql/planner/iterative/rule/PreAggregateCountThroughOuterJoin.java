@@ -19,7 +19,6 @@ import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.metadata.FunctionAndTypeManager;
 import com.facebook.presto.spi.constraints.NotNullConstraint;
-import com.facebook.presto.spi.constraints.PrimaryKeyConstraint;
 import com.facebook.presto.spi.plan.AggregationNode;
 import com.facebook.presto.spi.plan.Assignments;
 import com.facebook.presto.spi.plan.EquiJoinClause;
@@ -34,7 +33,6 @@ import com.facebook.presto.spi.relation.ConstantExpression;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.SpecialFormExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.planner.VariablesExtractor;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.relational.FunctionResolution;
 import com.google.common.collect.ImmutableList;
@@ -53,7 +51,9 @@ import static com.facebook.presto.spi.plan.AggregationNode.singleGroupingSet;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.COALESCE;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.planner.optimizations.AggregationNodeUtils.count;
+import static com.facebook.presto.sql.planner.optimizations.DistinctOutputQueryUtil.isDistinct;
 import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identityAssignments;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.isIdentity;
 import static com.facebook.presto.sql.planner.plan.Patterns.aggregation;
 import static com.facebook.presto.sql.planner.plan.Patterns.join;
 import static com.facebook.presto.sql.planner.plan.Patterns.source;
@@ -106,6 +106,10 @@ public class PreAggregateCountThroughOuterJoin
         if (!ImmutableSet.copyOf(sides.getOuter().getOutputVariables()).containsAll(aggregation.getGroupingKeys())) {
             return Result.empty();
         }
+        if (ImmutableSet.copyOf(aggregation.getGroupingKeys()).equals(ImmutableSet.copyOf(sides.getOuter().getOutputVariables()))
+                && isDistinctOnOutputVariables(sides.getOuter(), context)) {
+            return Result.empty();
+        }
 
         ImmutableMap.Builder<VariableReferenceExpression, AggregationNode.Aggregation> preAggregations = ImmutableMap.builder();
         ImmutableMap.Builder<VariableReferenceExpression, VariableReferenceExpression> originalToPreAggregation = ImmutableMap.builder();
@@ -144,10 +148,10 @@ public class PreAggregateCountThroughOuterJoin
                                 .addAll(sides.getOuter().getOutputVariables())
                                 .build(),
                 Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
+                join.getLeftHashVariable(),
+                join.getRightHashVariable(),
                 join.getDistributionType(),
-                ImmutableMap.of());
+                join.getDynamicFilters());
 
         ImmutableMap<VariableReferenceExpression, VariableReferenceExpression> preAggregationVariables = originalToPreAggregation.build();
         ImmutableMap.Builder<VariableReferenceExpression, AggregationNode.Aggregation> finalAggregations = ImmutableMap.builder();
@@ -202,8 +206,8 @@ public class PreAggregateCountThroughOuterJoin
             return aggregation;
         }
 
-        List<VariableReferenceExpression> variables = ImmutableList.copyOf(VariablesExtractor.extractUnique(aggregation.getArguments()));
-        if (variables.size() != 1 || !isKnownNonNull(source, variables.get(0), context)) {
+        RowExpression argument = aggregation.getArguments().get(0);
+        if (!(argument instanceof VariableReferenceExpression) || !isKnownNonNull(source, (VariableReferenceExpression) argument, context)) {
             return aggregation;
         }
 
@@ -228,7 +232,7 @@ public class PreAggregateCountThroughOuterJoin
             TableScanNode tableScan = (TableScanNode) resolved;
             return Optional.ofNullable(tableScan.getAssignments().get(variable))
                     .map(column -> tableScan.getTableConstraints().stream()
-                            .filter(constraint -> (constraint instanceof NotNullConstraint || constraint instanceof PrimaryKeyConstraint) && (constraint.isEnabled() || constraint.isRely()))
+                            .filter(constraint -> constraint instanceof NotNullConstraint && (constraint.isEnabled() || constraint.isRely()))
                             .anyMatch(constraint -> constraint.getColumns().contains(column)))
                     .orElse(false);
         }
@@ -236,14 +240,31 @@ public class PreAggregateCountThroughOuterJoin
         return false;
     }
 
+    private boolean isDistinctOnOutputVariables(PlanNode node, Context context)
+    {
+        PlanNode resolved = context.getLookup().resolve(node);
+        if (resolved instanceof ProjectNode) {
+            ProjectNode project = (ProjectNode) resolved;
+            if (isIdentity(project.getAssignments())
+                    && ImmutableSet.copyOf(project.getOutputVariables()).equals(ImmutableSet.copyOf(project.getSource().getOutputVariables()))) {
+                return isDistinctOnOutputVariables(project.getSource(), context);
+            }
+        }
+
+        return isDistinct(resolved, context.getLookup()::resolve);
+    }
+
     private boolean isSupported(AggregationNode aggregation, JoinNode join)
     {
         if (!(join.getType() == JoinType.LEFT || join.getType() == JoinType.RIGHT)
                 || join.getFilter().isPresent()
                 || join.getCriteria().isEmpty()
+                || join.getLeftHashVariable().isPresent()
+                || join.getRightHashVariable().isPresent()
                 || aggregation.getAggregations().isEmpty()
                 || aggregation.getStep() != AggregationNode.Step.SINGLE
                 || aggregation.getGroupingSetCount() != 1
+                || !aggregation.getPreGroupedVariables().isEmpty()
                 || aggregation.getHashVariable().isPresent()
                 || aggregation.getGroupIdVariable().isPresent()
                 || aggregation.getAggregationId().isPresent()) {
@@ -251,17 +272,23 @@ public class PreAggregateCountThroughOuterJoin
         }
 
         JoinSides sides = new JoinSides(join);
+        if (join.getType() == JoinType.LEFT
+                && !ImmutableSet.copyOf(sides.getInnerJoinKeys()).containsAll(join.getDynamicFilters().values())) {
+            return false;
+        }
+
         Set<VariableReferenceExpression> innerVariables = ImmutableSet.copyOf(sides.getInner().getOutputVariables());
         for (AggregationNode.Aggregation aggregate : aggregation.getAggregations().values()) {
             if (!functionResolution.isCountFunction(aggregate.getFunctionHandle())
                     || aggregate.getArguments().size() != 1
+                    || !(aggregate.getArguments().get(0) instanceof VariableReferenceExpression)
                     || aggregate.isDistinct()
                     || aggregate.getFilter().isPresent()
                     || aggregate.getMask().isPresent()
                     || aggregate.getOrderBy().isPresent()) {
                 return false;
             }
-            if (!innerVariables.containsAll(VariablesExtractor.extractUnique(aggregate.getArguments()))) {
+            if (!innerVariables.contains((VariableReferenceExpression) aggregate.getArguments().get(0))) {
                 return false;
             }
         }
@@ -291,6 +318,7 @@ public class PreAggregateCountThroughOuterJoin
         {
             return join.getCriteria().stream()
                     .map(join.getType() == JoinType.LEFT ? EquiJoinClause::getRight : EquiJoinClause::getLeft)
+                    .distinct()
                     .collect(toImmutableList());
         }
     }

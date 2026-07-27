@@ -21,7 +21,9 @@ import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.metadata.FunctionAndTypeManager;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
+import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.TableMetadata;
 import com.facebook.presto.spi.constraints.ForeignKeyConstraint;
 import com.facebook.presto.spi.constraints.NotNullConstraint;
@@ -427,7 +429,15 @@ public class PushAggregationThroughCardinalityPreservingLookupJoin
         }
 
         VariableReferenceExpression input = (VariableReferenceExpression) aggregation.getArguments().get(0);
-        return functionAndTypeManager.lookupFunction("sum", fromTypes(input.getType())).equals(aggregation.getFunctionHandle());
+        try {
+            return functionAndTypeManager.lookupFunction("sum", fromTypes(input.getType())).equals(aggregation.getFunctionHandle());
+        }
+        catch (PrestoException e) {
+            if (e.getErrorCode().equals(StandardErrorCode.FUNCTION_NOT_FOUND.toErrorCode())) {
+                return false;
+            }
+            throw e;
+        }
     }
 
     private AggregationNode.Aggregation sum(VariableReferenceExpression variable)

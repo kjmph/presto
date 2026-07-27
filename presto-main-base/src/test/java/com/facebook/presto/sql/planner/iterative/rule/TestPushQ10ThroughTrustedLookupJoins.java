@@ -51,6 +51,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.common.type.DoubleType.DOUBLE;
 import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
@@ -529,6 +530,28 @@ public class TestPushQ10ThroughTrustedLookupJoins
                 .validates(plan -> assertNoLookupPayloadAggregation(
                         plan,
                         ImmutableSet.of(nName)));
+    }
+
+    @Test
+    public void testDoesNotFireForCountBoolean()
+    {
+        tester().assertThat(new PushAggregationThroughCardinalityPreservingLookupJoin(tester().getMetadata()))
+                .on(p -> {
+                    VariableReferenceExpression leftKey = p.variable("left_key");
+                    VariableReferenceExpression countInput = p.variable("count_input", BOOLEAN);
+                    VariableReferenceExpression rightKey = p.variable("right_key");
+                    VariableReferenceExpression count = p.variable("count", BIGINT);
+
+                    return p.aggregation(aggregation -> aggregation
+                            .singleGroupingSet(leftKey)
+                            .addAggregation(count, p.rowExpression("count(count_input)"))
+                            .source(p.join(
+                                    JoinType.INNER,
+                                    p.values(leftKey, countInput),
+                                    p.values(rightKey),
+                                    new EquiJoinClause(leftKey, rightKey))));
+                })
+                .doesNotFire();
     }
 
     private void assertQ10Shape(
