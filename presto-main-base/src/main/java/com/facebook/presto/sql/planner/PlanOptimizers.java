@@ -1245,10 +1245,11 @@ public class PlanOptimizers
                         ruleStats,
                         statsCalculator,
                         costCalculator,
-                        ImmutableSet.of(
-                                new SplitGroupedScalarFilterAggregation(metadata.getFunctionAndTypeManager()),
-                                new PushPartialAggregationThroughJoin(),
-                                new PushPartialAggregationThroughExchange(metadata.getFunctionAndTypeManager(), featuresConfig.isNativeExecutionEnabled()))),
+                        ImmutableSet.<Rule<?>>builder()
+                                .add(new SplitGroupedScalarFilterAggregation(metadata.getFunctionAndTypeManager()))
+                                .addAll(new PushPartialAggregationThroughJoin(metadata.getFunctionAndTypeManager()).rules())
+                                .addAll(new PushPartialAggregationThroughExchange(metadata.getFunctionAndTypeManager(), featuresConfig.isNativeExecutionEnabled()).rules())
+                                .build()),
                 // MergePartialAggregationsWithFilter should immediately follow PushPartialAggregationThroughExchange
                 new MergePartialAggregationsWithFilter(metadata.getFunctionAndTypeManager()),
                 new IterativeOptimizer(

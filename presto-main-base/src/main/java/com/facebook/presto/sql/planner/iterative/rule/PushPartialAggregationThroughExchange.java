@@ -37,6 +37,7 @@ import com.facebook.presto.sql.planner.PlannerUtils;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.optimizations.SymbolMapper;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 
 import java.util.ArrayList;
@@ -49,6 +50,7 @@ import java.util.stream.Collectors;
 
 import static com.facebook.presto.SystemSessionProperties.getPartialAggregationByteReductionThreshold;
 import static com.facebook.presto.SystemSessionProperties.getPartialAggregationStrategy;
+import static com.facebook.presto.SystemSessionProperties.isPullConstantProjectionAboveExchange;
 import static com.facebook.presto.SystemSessionProperties.isStreamingForPartialAggregationEnabled;
 import static com.facebook.presto.SystemSessionProperties.usePartialAggregationHistory;
 import static com.facebook.presto.cost.AggregationStatsRule.groupBy;
@@ -62,10 +64,13 @@ import static com.facebook.presto.spi.statistics.SourceInfo.ConfidenceLevel;
 import static com.facebook.presto.spi.statistics.SourceInfo.ConfidenceLevel.LOW;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.PartialAggregationStrategy.AUTOMATIC;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.PartialAggregationStrategy.NEVER;
+import static com.facebook.presto.sql.planner.iterative.rule.PushProjectionThroughExchange.isSymbolOrConstantProjection;
+import static com.facebook.presto.sql.planner.iterative.rule.PushProjectionThroughExchange.isSymbolToSymbolProjection;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.GATHER;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.REPARTITION;
 import static com.facebook.presto.sql.planner.plan.Patterns.aggregation;
 import static com.facebook.presto.sql.planner.plan.Patterns.exchange;
+import static com.facebook.presto.sql.planner.plan.Patterns.project;
 import static com.facebook.presto.sql.planner.plan.Patterns.source;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
@@ -89,12 +94,33 @@ public class PushPartialAggregationThroughExchange
     }
 
     private static final Capture<ExchangeNode> EXCHANGE_NODE = Capture.newCapture();
+    private static final Capture<ExchangeNode> PROJECTED_EXCHANGE_NODE = Capture.newCapture();
 
     private static final Pattern<AggregationNode> PATTERN = aggregation()
             .with(source().matching(
                     exchange()
                             .matching(node -> !node.getOrderingScheme().isPresent())
                             .capturedAs(EXCHANGE_NODE)));
+
+    private static final Pattern<AggregationNode> PATTERN_WITH_PROJECTION = aggregation()
+            .with(source().matching(
+                    project()
+                            .matching(project -> project.getLocality() != ProjectNode.Locality.REMOTE && !isSymbolToSymbolProjection(project))
+                            .with(source().matching(
+                                    exchange()
+                                            .matching(node -> !node.getOrderingScheme().isPresent())
+                                            .capturedAs(PROJECTED_EXCHANGE_NODE)))));
+
+    public Iterable<Rule<?>> rules()
+    {
+        return ImmutableList.of(this, pushPartialAggregationThroughExchangeWithProjection());
+    }
+
+    @VisibleForTesting
+    Rule<AggregationNode> pushPartialAggregationThroughExchangeWithProjection()
+    {
+        return new PushPartialAggregationThroughExchangeWithProjection();
+    }
 
     @Override
     public Pattern<AggregationNode> getPattern()
@@ -118,7 +144,11 @@ public class PushPartialAggregationThroughExchange
     public Result apply(AggregationNode aggregationNode, Captures captures, Context context)
     {
         ExchangeNode exchangeNode = captures.get(EXCHANGE_NODE);
+        return applyPushdown(aggregationNode, exchangeNode, context);
+    }
 
+    private Result applyPushdown(AggregationNode aggregationNode, ExchangeNode exchangeNode, Context context)
+    {
         boolean decomposable = isDecomposable(aggregationNode, functionAndTypeManager);
 
         if (aggregationNode.getStep().equals(SINGLE) &&
@@ -194,6 +224,42 @@ public class PushPartialAggregationThroughExchange
                 return Result.ofPlanNode(resultNode);
             default:
                 return Result.empty();
+        }
+    }
+
+    private class PushPartialAggregationThroughExchangeWithProjection
+            implements Rule<AggregationNode>
+    {
+        @Override
+        public Pattern<AggregationNode> getPattern()
+        {
+            return PATTERN_WITH_PROJECTION;
+        }
+
+        @Override
+        public boolean isCostBased(Session session)
+        {
+            return PushPartialAggregationThroughExchange.this.isCostBased(session);
+        }
+
+        @Override
+        public String getStatsSource()
+        {
+            return PushPartialAggregationThroughExchange.this.getStatsSource();
+        }
+
+        @Override
+        public Result apply(AggregationNode aggregation, Captures captures, Context context)
+        {
+            ProjectNode project = (ProjectNode) context.getLookup().resolve(aggregation.getSource());
+            if (isPullConstantProjectionAboveExchange(context.getSession()) && isSymbolOrConstantProjection(project)) {
+                return Result.empty();
+            }
+            ExchangeNode exchange = PushProjectionThroughExchange.pushProjectThroughExchange(
+                    project,
+                    captures.get(PROJECTED_EXCHANGE_NODE),
+                    context);
+            return applyPushdown(aggregation, exchange, context);
         }
     }
 
