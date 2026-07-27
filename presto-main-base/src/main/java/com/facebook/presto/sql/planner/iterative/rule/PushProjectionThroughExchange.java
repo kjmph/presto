@@ -95,6 +95,13 @@ public class PushProjectionThroughExchange
             return Result.empty();
         }
 
+        PlanNode result = pushProjectThroughExchange(project, exchange, context);
+        // We need to strip unnecessary hash, ordering, and partitioning symbols.
+        return Result.ofPlanNode(restrictOutputs(context.getIdAllocator(), result, ImmutableSet.copyOf(project.getOutputVariables())).orElse(result));
+    }
+
+    static ExchangeNode pushProjectThroughExchange(ProjectNode project, ExchangeNode exchange, Context context)
+    {
         Set<VariableReferenceExpression> partitioningColumns = exchange.getPartitioningScheme().getPartitioning().getVariableReferences();
 
         ImmutableList.Builder<PlanNode> newSourceBuilder = ImmutableList.builder();
@@ -133,6 +140,9 @@ public class PushProjectionThroughExchange
             }
 
             for (Map.Entry<VariableReferenceExpression, RowExpression> projection : project.getAssignments().entrySet()) {
+                if (isIdentityProjectionForExchangeOutput(projection, partitioningColumns, exchange)) {
+                    continue;
+                }
                 RowExpression translatedExpression = RowExpressionVariableInliner.inlineVariables(outputToInputMap, projection.getValue());
                 VariableReferenceExpression variable = context.getVariableAllocator().newVariable(translatedExpression);
                 projections.put(variable, translatedExpression);
@@ -152,6 +162,9 @@ public class PushProjectionThroughExchange
                     .forEach(outputBuilder::add);
         }
         for (Map.Entry<VariableReferenceExpression, RowExpression> projection : project.getAssignments().entrySet()) {
+            if (isIdentityProjectionForExchangeOutput(projection, partitioningColumns, exchange)) {
+                continue;
+            }
             outputBuilder.add(projection.getKey());
         }
 
@@ -166,7 +179,7 @@ public class PushProjectionThroughExchange
                 exchange.getPartitioningScheme().getEncoding(),
                 exchange.getPartitioningScheme().getBucketToPartition());
 
-        PlanNode result = new ExchangeNode(
+        return new ExchangeNode(
                 exchange.getSourceLocation(),
                 exchange.getId(),
                 exchange.getType(),
@@ -176,17 +189,14 @@ public class PushProjectionThroughExchange
                 inputsBuilder.build(),
                 exchange.isEnsureSourceOrdering(),
                 exchange.getOrderingScheme());
-
-        // we need to strip unnecessary symbols (hash, partitioning columns).
-        return Result.ofPlanNode(restrictOutputs(context.getIdAllocator(), result, ImmutableSet.copyOf(project.getOutputVariables())).orElse(result));
     }
 
-    private static boolean isSymbolToSymbolProjection(ProjectNode project)
+    static boolean isSymbolToSymbolProjection(ProjectNode project)
     {
         return project.getAssignments().getExpressions().stream().allMatch(e -> e instanceof VariableReferenceExpression);
     }
 
-    private static boolean isSymbolOrConstantProjection(ProjectNode project)
+    static boolean isSymbolOrConstantProjection(ProjectNode project)
     {
         return project.getAssignments().getExpressions().stream().allMatch(
                 e -> e instanceof VariableReferenceExpression || e instanceof ConstantExpression);
@@ -199,5 +209,18 @@ public class PushProjectionThroughExchange
             outputToInputMap.put(exchange.getOutputVariables().get(i), exchange.getInputs().get(sourceIndex).get(i));
         }
         return outputToInputMap;
+    }
+
+    private static boolean isIdentityProjectionForExchangeOutput(
+            Map.Entry<VariableReferenceExpression, RowExpression> projection,
+            Set<VariableReferenceExpression> partitioningColumns,
+            ExchangeNode exchange)
+    {
+        if (!projection.getKey().equals(projection.getValue())) {
+            return false;
+        }
+        return partitioningColumns.contains(projection.getKey()) ||
+                exchange.getPartitioningScheme().getHashColumn().map(projection.getKey()::equals).orElse(false) ||
+                exchange.getOrderingScheme().map(ordering -> ordering.getOrderByVariables().contains(projection.getKey())).orElse(false);
     }
 }

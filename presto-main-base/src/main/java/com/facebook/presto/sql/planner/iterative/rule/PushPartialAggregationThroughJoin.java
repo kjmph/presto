@@ -17,35 +17,39 @@ import com.facebook.presto.Session;
 import com.facebook.presto.matching.Capture;
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
+import com.facebook.presto.metadata.FunctionAndTypeManager;
 import com.facebook.presto.spi.plan.AggregationNode;
-import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.JoinNode;
 import com.facebook.presto.spi.plan.JoinType;
 import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.ProjectNode;
+import com.facebook.presto.spi.relation.DeterminismEvaluator;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.planner.TypeProvider;
-import com.facebook.presto.sql.planner.VariablesExtractor;
 import com.facebook.presto.sql.planner.iterative.Rule;
+import com.facebook.presto.sql.relational.RowExpressionDeterminismEvaluator;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Streams;
 
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.facebook.presto.SystemSessionProperties.isPushAggregationThroughJoin;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.PARTIAL;
 import static com.facebook.presto.spi.plan.AggregationNode.singleGroupingSet;
+import static com.facebook.presto.sql.planner.iterative.rule.PushProjectionThroughJoin.getJoinRequiredVariables;
 import static com.facebook.presto.sql.planner.iterative.rule.Util.restrictOutputs;
 import static com.facebook.presto.sql.planner.optimizations.AggregationNodeUtils.extractAggregationUniqueVariables;
 import static com.facebook.presto.sql.planner.plan.Patterns.aggregation;
 import static com.facebook.presto.sql.planner.plan.Patterns.join;
+import static com.facebook.presto.sql.planner.plan.Patterns.project;
 import static com.facebook.presto.sql.planner.plan.Patterns.source;
-import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Sets.intersection;
+import static java.util.Objects.requireNonNull;
 
 public class PushPartialAggregationThroughJoin
         implements Rule<AggregationNode>
@@ -55,6 +59,28 @@ public class PushPartialAggregationThroughJoin
     private static final Pattern<AggregationNode> PATTERN = aggregation()
             .matching(PushPartialAggregationThroughJoin::isSupportedAggregationNode)
             .with(source().matching(join().capturedAs(JOIN_NODE)));
+
+    private static final Pattern<AggregationNode> PATTERN_WITH_PROJECTION = aggregation()
+            .matching(PushPartialAggregationThroughJoin::isSupportedAggregationNode)
+            .with(source().matching(project().with(source().matching(join()))));
+
+    private final DeterminismEvaluator determinismEvaluator;
+
+    public PushPartialAggregationThroughJoin(FunctionAndTypeManager functionAndTypeManager)
+    {
+        this.determinismEvaluator = new RowExpressionDeterminismEvaluator(requireNonNull(functionAndTypeManager, "functionAndTypeManager is null"));
+    }
+
+    public Iterable<Rule<?>> rules()
+    {
+        return ImmutableList.of(this, pushPartialAggregationThroughJoinWithProjection());
+    }
+
+    @VisibleForTesting
+    Rule<AggregationNode> pushPartialAggregationThroughJoinWithProjection()
+    {
+        return new PushPartialAggregationThroughJoinWithProjection();
+    }
 
     private static boolean isSupportedAggregationNode(AggregationNode aggregationNode)
     {
@@ -86,17 +112,21 @@ public class PushPartialAggregationThroughJoin
     public Result apply(AggregationNode aggregationNode, Captures captures, Context context)
     {
         JoinNode joinNode = captures.get(JOIN_NODE);
+        return applyPushdown(aggregationNode, joinNode, context);
+    }
 
+    private Result applyPushdown(AggregationNode aggregationNode, JoinNode joinNode, Context context)
+    {
         if (joinNode.getType() != JoinType.INNER) {
             return Result.empty();
         }
 
         // TODO: leave partial aggregation above Join?
-        if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getLeft().getOutputVariables(), TypeProvider.viewOf(context.getVariableAllocator().getVariables()))) {
+        if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getLeft().getOutputVariables())) {
             return Result.ofPlanNode(pushPartialToLeftChild(aggregationNode, joinNode, context));
         }
         else {
-            if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getRight().getOutputVariables(), TypeProvider.viewOf(context.getVariableAllocator().getVariables()))) {
+            if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getRight().getOutputVariables())) {
                 return Result.ofPlanNode(pushPartialToRightChild(aggregationNode, joinNode, context));
             }
         }
@@ -104,14 +134,14 @@ public class PushPartialAggregationThroughJoin
         return Result.empty();
     }
 
-    private boolean allAggregationsOn(Map<VariableReferenceExpression, AggregationNode.Aggregation> aggregations, List<VariableReferenceExpression> variables, TypeProvider types)
+    private boolean allAggregationsOn(Map<VariableReferenceExpression, AggregationNode.Aggregation> aggregations, List<VariableReferenceExpression> variables)
     {
-        Set<VariableReferenceExpression> inputs = aggregations.values()
-                .stream()
-                .map(aggregation -> extractAggregationUniqueVariables(aggregation))
-                .flatMap(Set::stream)
-                .collect(toImmutableSet());
-        return variables.containsAll(inputs);
+        ImmutableSet.Builder<VariableReferenceExpression> inputs = ImmutableSet.builder();
+        aggregations.values().forEach(aggregation -> {
+            inputs.addAll(extractAggregationUniqueVariables(aggregation));
+            aggregation.getMask().ifPresent(inputs::add);
+        });
+        return variables.containsAll(inputs.build());
     }
 
     private PlanNode pushPartialToLeftChild(AggregationNode node, JoinNode child, Context context)
@@ -128,17 +158,6 @@ public class PushPartialAggregationThroughJoin
         List<VariableReferenceExpression> groupingSet = getPushedDownGroupingSet(node, joinRightChildVariables, intersection(getJoinRequiredVariables(child), joinRightChildVariables));
         AggregationNode pushedAggregation = replaceAggregationSource(node, child.getRight(), groupingSet);
         return pushPartialToJoin(node, child, child.getLeft(), pushedAggregation, context);
-    }
-
-    private Set<VariableReferenceExpression> getJoinRequiredVariables(JoinNode node)
-    {
-        return Streams.concat(
-                        node.getCriteria().stream().map(EquiJoinClause::getLeft),
-                        node.getCriteria().stream().map(EquiJoinClause::getRight),
-                        node.getFilter().map(expression -> VariablesExtractor.extractUnique(expression)).orElse(ImmutableSet.of()).stream(),
-                        node.getLeftHashVariable().map(ImmutableSet::of).orElse(ImmutableSet.of()).stream(),
-                        node.getRightHashVariable().map(ImmutableSet::of).orElse(ImmutableSet.of()).stream())
-                .collect(toImmutableSet());
     }
 
     private List<VariableReferenceExpression> getPushedDownGroupingSet(AggregationNode aggregation, Set<VariableReferenceExpression> availableVariables, Set<VariableReferenceExpression> requiredJoinVariables)
@@ -187,6 +206,7 @@ public class PushPartialAggregationThroughJoin
         JoinNode joinNode = new JoinNode(
                 child.getSourceLocation(),
                 child.getId(),
+                Optional.empty(),
                 child.getType(),
                 leftChild,
                 rightChild,
@@ -199,7 +219,46 @@ public class PushPartialAggregationThroughJoin
                 child.getLeftHashVariable(),
                 child.getRightHashVariable(),
                 child.getDistributionType(),
-                child.getDynamicFilters());
+                child.getDynamicFilters(),
+                child.isLeftKeysUnique(),
+                child.isRightKeysUnique(),
+                child.isLeftKeysNonNull(),
+                child.isRightKeysNonNull(),
+                child.isLeftKeysCoveredByRightKeys(),
+                child.isRightKeysCoveredByLeftKeys());
         return restrictOutputs(context.getIdAllocator(), joinNode, ImmutableSet.copyOf(aggregation.getOutputVariables())).orElse(joinNode);
+    }
+
+    private class PushPartialAggregationThroughJoinWithProjection
+            implements Rule<AggregationNode>
+    {
+        @Override
+        public Pattern<AggregationNode> getPattern()
+        {
+            return PATTERN_WITH_PROJECTION;
+        }
+
+        @Override
+        public boolean isEnabled(Session session)
+        {
+            return PushPartialAggregationThroughJoin.this.isEnabled(session);
+        }
+
+        @Override
+        public Result apply(AggregationNode aggregation, Captures captures, Context context)
+        {
+            ProjectNode project = (ProjectNode) context.getLookup().resolve(aggregation.getSource());
+            Optional<JoinNode> projectedJoin = PushProjectionThroughJoin.pushProjectionThroughJoin(
+                    project,
+                    context.getLookup(),
+                    context.getIdAllocator(),
+                    determinismEvaluator);
+            if (!projectedJoin.isPresent()) {
+                return Result.empty();
+            }
+
+            AggregationNode rewrittenAggregation = (AggregationNode) aggregation.replaceChildren(ImmutableList.of(projectedJoin.get()));
+            return applyPushdown(rewrittenAggregation, projectedJoin.get(), context);
+        }
     }
 }
