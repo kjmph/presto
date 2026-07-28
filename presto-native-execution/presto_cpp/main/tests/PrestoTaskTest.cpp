@@ -101,6 +101,14 @@ TEST_F(PrestoTaskTest, runtimeMetricConversion) {
   EXPECT_EQ(veloxMetric.min, prestoMetric.min);
 }
 
+TEST_F(PrestoTaskTest, operatorTypeConversion) {
+  EXPECT_EQ("ExchangeOperator", toPrestoOperatorType("Exchange"));
+  EXPECT_EQ("ExchangeOperator", toPrestoOperatorType("UcxExchange"));
+  EXPECT_EQ("ExchangeOperator", toPrestoOperatorType("UcxCpuRowExchange"));
+  EXPECT_EQ("MergeOperator", toPrestoOperatorType("MergeExchange"));
+  EXPECT_EQ("FilterProject", toPrestoOperatorType("FilterProject"));
+}
+
 TEST_F(PrestoTaskTest, basic) {
   PrestoTask task{"20201107_130540_00011_wrpkw.1.2.3.4", "node2", 0};
 

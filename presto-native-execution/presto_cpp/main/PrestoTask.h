@@ -39,6 +39,8 @@ enum class PrestoTaskState : int {
 
 std::string prestoTaskStateString(PrestoTaskState state);
 
+std::string toPrestoOperatorType(const std::string& operatorType);
+
 template <typename T>
 struct PromiseHolder {
   explicit PromiseHolder(folly::Promise<T> p) : promise(std::move(p)) {}
