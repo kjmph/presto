@@ -159,7 +159,8 @@ std::string toPrestoOperatorType(const std::string& operatorType) {
   if (operatorType == "MergeExchange") {
     return "MergeOperator";
   }
-  if (operatorType == "Exchange") {
+  if (operatorType == "Exchange" || operatorType == "UcxExchange" ||
+      operatorType == "UcxCpuRowExchange") {
     return "ExchangeOperator";
   }
   if (operatorType == "TableScan") {
