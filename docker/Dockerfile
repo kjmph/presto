@@ -14,6 +14,15 @@ RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked \
     # clean cache jobs
     && mv /etc/yum/protected.d/systemd.conf /etc/yum/protected.d/systemd.conf.bak
 
+RUN mkdir -p /usr/lib/presto/utils \
+    && (curl --fail --location --retry 3 --retry-all-errors --retry-max-time 30 \
+        --output /usr/lib/presto/utils/jmx_prometheus_javaagent-$JMX_PROMETHEUS_JAVAAGENT_VERSION.jar \
+        https://maven-central.storage-download.googleapis.com/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/$JMX_PROMETHEUS_JAVAAGENT_VERSION/jmx_prometheus_javaagent-$JMX_PROMETHEUS_JAVAAGENT_VERSION.jar \
+        || curl --fail --location --retry 3 --retry-all-errors --retry-max-time 30 \
+        --output /usr/lib/presto/utils/jmx_prometheus_javaagent-$JMX_PROMETHEUS_JAVAAGENT_VERSION.jar \
+        https://repo.maven.apache.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/$JMX_PROMETHEUS_JAVAAGENT_VERSION/jmx_prometheus_javaagent-$JMX_PROMETHEUS_JAVAAGENT_VERSION.jar) \
+    && ln -s /usr/lib/presto/utils/jmx_prometheus_javaagent-$JMX_PROMETHEUS_JAVAAGENT_VERSION.jar /usr/lib/presto/utils/jmx_prometheus_javaagent.jar
+
 COPY --chmod=755 $PRESTO_CLI_JAR              /opt/presto-cli
 COPY --chmod=755 $PRESTO_FUNCTION_SERVER_JAR  /opt/presto-remote-function-server
 
@@ -24,10 +33,7 @@ RUN --mount=type=bind,source=$PRESTO_PKG,target=/$PRESTO_PKG \
     && ln -s /opt/presto-cli /usr/local/bin/ \
     #  mkdir for config
     && mkdir -p $PRESTO_HOME/etc/catalog \
-    && mkdir -p /var/lib/presto/data \
-        && mkdir -p /usr/lib/presto/utils \
-        && curl -o /usr/lib/presto/utils/jmx_prometheus_javaagent-$JMX_PROMETHEUS_JAVAAGENT_VERSION.jar https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/$JMX_PROMETHEUS_JAVAAGENT_VERSION/jmx_prometheus_javaagent-$JMX_PROMETHEUS_JAVAAGENT_VERSION.jar \
-        && ln -s /usr/lib/presto/utils/jmx_prometheus_javaagent-$JMX_PROMETHEUS_JAVAAGENT_VERSION.jar /usr/lib/presto/utils/jmx_prometheus_javaagent.jar
+    && mkdir -p /var/lib/presto/data
 
 COPY etc/config.properties.example $PRESTO_HOME/etc/config.properties
 COPY etc/jvm.config.example $PRESTO_HOME/etc/jvm.config
