@@ -16,6 +16,7 @@ package com.facebook.presto.sql.planner.iterative.rule;
 import com.facebook.presto.common.predicate.TupleDomain;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.cost.CostComparator;
+import com.facebook.presto.cost.PlanNodeStatsEstimate;
 import com.facebook.presto.cost.TaskCountEstimator;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorId;
@@ -30,6 +31,8 @@ import com.facebook.presto.spi.plan.JoinNode;
 import com.facebook.presto.spi.plan.Ordering;
 import com.facebook.presto.spi.plan.OrderingScheme;
 import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.ProjectNode;
 import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.plan.TopNNode;
 import com.facebook.presto.spi.relation.ConstantExpression;
@@ -44,6 +47,7 @@ import com.facebook.presto.tpch.TpchTableHandle;
 import com.facebook.presto.tpch.TpchTableLayoutHandle;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -54,6 +58,7 @@ import java.util.Optional;
 
 import static com.facebook.presto.SystemSessionProperties.IGNORE_STATS_CALCULATOR_FAILURES;
 import static com.facebook.presto.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
+import static com.facebook.presto.common.block.SortOrder.ASC_NULLS_LAST;
 import static com.facebook.presto.common.block.SortOrder.DESC_NULLS_LAST;
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.common.type.DecimalType.createDecimalType;
@@ -69,6 +74,8 @@ import static org.testng.Assert.assertTrue;
 public class TestPushTopNThroughCardinalityPreservingJoin
         extends BaseRuleTest
 {
+    private static final String UNKNOWN_FACT_JOIN_ID = "unknown_fact_join";
+
     private TableHandle ordersTableHandle;
     private TableHandle customerTableHandle;
     private ColumnHandle ordersCustkeyColumn;
@@ -113,8 +120,13 @@ public class TestPushTopNThroughCardinalityPreservingJoin
                 .get();
 
         assertTrue(rewrittenPlan instanceof TopNNode);
-        assertTrue(((TopNNode) rewrittenPlan).getSource() instanceof JoinNode);
-        JoinNode rewrittenJoin = (JoinNode) ((TopNNode) rewrittenPlan).getSource();
+        TopNNode outerFinal = (TopNNode) rewrittenPlan;
+        assertEquals(outerFinal.getStep(), TopNNode.Step.FINAL);
+        assertTrue(outerFinal.getSource() instanceof TopNNode);
+        TopNNode outerPartial = (TopNNode) outerFinal.getSource();
+        assertEquals(outerPartial.getStep(), TopNNode.Step.PARTIAL);
+        assertTrue(outerPartial.getSource() instanceof JoinNode);
+        JoinNode rewrittenJoin = (JoinNode) outerPartial.getSource();
         assertEquals(rewrittenJoin.getDistributionType(), Optional.empty());
         assertTrue(rewrittenJoin.getDynamicFilters().isEmpty());
         assertEquals(rewrittenJoin.isLeftKeysUnique(), lookupOnLeft);
@@ -126,7 +138,189 @@ public class TestPushTopNThroughCardinalityPreservingJoin
 
         PlanNode rewrittenBase = lookupOnLeft ? rewrittenJoin.getRight() : rewrittenJoin.getLeft();
         assertTrue(rewrittenBase instanceof TopNNode);
-        assertEquals(((TopNNode) rewrittenBase).getStep(), TopNNode.Step.PARTIAL);
+        TopNNode innerFinal = (TopNNode) rewrittenBase;
+        assertEquals(innerFinal.getStep(), TopNNode.Step.FINAL);
+        assertTrue(innerFinal.getSource() instanceof TopNNode);
+        assertEquals(((TopNNode) innerFinal.getSource()).getStep(), TopNNode.Step.PARTIAL);
+    }
+
+    @Test
+    public void testCompleteTopNPushdownIsIdempotent()
+    {
+        PushTopNThroughCardinalityPreservingJoin rule = new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata());
+        tester.assertThat(rule)
+                .on(p -> directLookupTopNWithCompletePushdown(p, DOUBLE))
+                .doesNotFire();
+    }
+
+    @Test
+    public void testPartialTopNPushdownRemainsPartial()
+    {
+        PlanNode rewrittenPlan = tester.assertThat(new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata()))
+                .on(p -> ((TopNNode) directLookupTopN(p, false, Optional.empty(), DOUBLE)).getSource())
+                .get();
+
+        assertTrue(rewrittenPlan instanceof TopNNode);
+        TopNNode outerPartial = (TopNNode) rewrittenPlan;
+        assertEquals(outerPartial.getStep(), TopNNode.Step.PARTIAL);
+        assertTrue(outerPartial.getSource() instanceof JoinNode);
+        JoinNode rewrittenJoin = (JoinNode) outerPartial.getSource();
+        assertTrue(rewrittenJoin.getLeft() instanceof TopNNode);
+        assertEquals(((TopNNode) rewrittenJoin.getLeft()).getStep(), TopNNode.Step.PARTIAL);
+    }
+
+    @Test
+    public void testCompletePushdownReusesExistingPartialTopN()
+    {
+        PlanNode rewrittenPlan = tester.assertThat(new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata()))
+                .on(p -> directLookupTopNWithPartialPushdown(p, DOUBLE))
+                .get();
+
+        TopNNode outerFinal = (TopNNode) rewrittenPlan;
+        TopNNode outerPartial = (TopNNode) outerFinal.getSource();
+        JoinNode rewrittenJoin = (JoinNode) outerPartial.getSource();
+        TopNNode innerFinal = (TopNNode) rewrittenJoin.getLeft();
+        assertEquals(innerFinal.getStep(), TopNNode.Step.FINAL);
+        assertTrue(innerFinal.getSource() instanceof TopNNode);
+        TopNNode innerPartial = (TopNNode) innerFinal.getSource();
+        assertEquals(innerPartial.getStep(), TopNNode.Step.PARTIAL);
+        assertFalse(innerPartial.getSource() instanceof TopNNode);
+    }
+
+    @Test
+    public void testCompletePushdownDoesNotDuplicateSingleTopN()
+    {
+        tester.assertThat(new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata()))
+                .on(p -> directLookupTopNWithSinglePushdown(p, DOUBLE))
+                .doesNotFire();
+    }
+
+    @Test(dataProvider = "orderingTypes")
+    public void testNestedCompleteTopNPushdown(Type orderingType)
+    {
+        PlanNode rewrittenPlan = tester.assertThat(new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata()))
+                .on(p -> nestedLookupTopN(p, orderingType))
+                .get();
+
+        TopNNode outerFinal = (TopNNode) rewrittenPlan;
+        assertEquals(outerFinal.getStep(), TopNNode.Step.FINAL);
+        TopNNode outerPartial = (TopNNode) outerFinal.getSource();
+        assertEquals(outerPartial.getStep(), TopNNode.Step.PARTIAL);
+        JoinNode lookupJoin = (JoinNode) outerPartial.getSource();
+        assertTrue(lookupJoin.getRight() instanceof TableScanNode);
+        assertEquals(((TableScanNode) lookupJoin.getRight()).getTable(), customerTableHandle);
+
+        TopNNode innerFinal = (TopNNode) lookupJoin.getLeft();
+        assertEquals(innerFinal.getStep(), TopNNode.Step.FINAL);
+        TopNNode innerPartial = (TopNNode) innerFinal.getSource();
+        assertEquals(innerPartial.getStep(), TopNNode.Step.PARTIAL);
+        assertTrue(innerPartial.getSource() instanceof JoinNode);
+    }
+
+    @Test(dataProvider = "orderingTypes")
+    public void testCompleteTopNPushdownThroughProjectionBetweenFinalAndPartial(Type orderingType)
+    {
+        PlanNode rewrittenPlan = tester.assertThat(new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata()))
+                .on(p -> projectedCompleteTopN(p, orderingType, false))
+                .get();
+
+        TopNNode outerFinal = (TopNNode) rewrittenPlan;
+        assertEquals(outerFinal.getStep(), TopNNode.Step.FINAL);
+        assertTrue(outerFinal.getSource() instanceof ProjectNode);
+        ProjectNode projection = (ProjectNode) outerFinal.getSource();
+        assertTrue(projection.getAssignments().getExpressions().stream()
+                .anyMatch(ConstantExpression.class::isInstance));
+
+        TopNNode outerPartial = (TopNNode) projection.getSource();
+        assertEquals(outerPartial.getStep(), TopNNode.Step.PARTIAL);
+        JoinNode lookupJoin = (JoinNode) outerPartial.getSource();
+        assertTrue(lookupJoin.getRight() instanceof TableScanNode);
+        assertEquals(((TableScanNode) lookupJoin.getRight()).getTable(), customerTableHandle);
+
+        TopNNode innerFinal = (TopNNode) lookupJoin.getLeft();
+        assertEquals(innerFinal.getStep(), TopNNode.Step.FINAL);
+        assertTrue(innerFinal.getSource() instanceof TopNNode);
+        TopNNode innerPartial = (TopNNode) innerFinal.getSource();
+        assertEquals(innerPartial.getStep(), TopNNode.Step.PARTIAL);
+        assertEquals(innerFinal.getOrderingScheme(), innerPartial.getOrderingScheme());
+        assertEquals(innerFinal.getOrderingScheme().getOrderBy().size(), 2);
+        assertEquals(innerFinal.getOrderingScheme().getOrderBy().get(0).getSortOrder(), DESC_NULLS_LAST);
+        assertEquals(innerFinal.getOrderingScheme().getOrderBy().get(1).getSortOrder(), ASC_NULLS_LAST);
+    }
+
+    @Test
+    public void testIterativeOptimizerCompletesProjectedPairToFixedPoint()
+    {
+        tester.assertThat(ImmutableSet.of(new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata())))
+                .on(p -> projectedCompleteTopN(p, DOUBLE, false))
+                .validates(plan -> {
+                    TopNNode outerFinal = (TopNNode) plan.getRoot();
+                    ProjectNode projection = (ProjectNode) outerFinal.getSource();
+                    TopNNode outerPartial = (TopNNode) projection.getSource();
+                    JoinNode lookupJoin = (JoinNode) outerPartial.getSource();
+                    TopNNode innerFinal = (TopNNode) lookupJoin.getLeft();
+                    assertEquals(innerFinal.getStep(), TopNNode.Step.FINAL);
+                    assertTrue(innerFinal.getSource() instanceof TopNNode);
+                    assertEquals(((TopNNode) innerFinal.getSource()).getStep(), TopNNode.Step.PARTIAL);
+                });
+    }
+
+    @Test
+    public void testCompleteTopNPushdownRejectsComputedOrderingProjection()
+    {
+        tester.assertThat(new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata()))
+                .on(p -> projectedCompleteTopN(p, DOUBLE, true))
+                .doesNotFire();
+    }
+
+    @Test
+    public void testCompleteTopNPushdownRejectsDuplicateProjectedOrderingVariables()
+    {
+        tester.assertThat(new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata()))
+                .on(this::duplicateProjectedOrderingTopN)
+                .doesNotFire();
+    }
+
+    @Test
+    public void testMismatchedFinalPartialPairDoesNotFire()
+    {
+        tester.assertThat(new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata()))
+                .on(p -> {
+                    TopNNode finalTopN = (TopNNode) directLookupTopN(p, false, Optional.empty(), DOUBLE);
+                    return new TopNNode(
+                            finalTopN.getSourceLocation(),
+                            p.getIdAllocator().getNextId(),
+                            finalTopN.getSource(),
+                            finalTopN.getCount() + 1,
+                            finalTopN.getOrderingScheme(),
+                            TopNNode.Step.FINAL);
+                })
+                .doesNotFire();
+    }
+
+    @Test(dataProvider = "orderingTypes")
+    public void testSingleTopNPushdownRemainsLogical(Type orderingType)
+    {
+        PlanNode rewrittenPlan = tester.assertThat(new PushTopNThroughCardinalityPreservingJoin(tester.getMetadata()))
+                .on(p -> {
+                    TopNNode finalTopN = (TopNNode) directLookupTopN(p, false, Optional.empty(), orderingType);
+                    TopNNode partialTopN = (TopNNode) finalTopN.getSource();
+                    return new TopNNode(
+                            partialTopN.getSourceLocation(),
+                            p.getIdAllocator().getNextId(),
+                            partialTopN.getSource(),
+                            partialTopN.getCount(),
+                            partialTopN.getOrderingScheme(),
+                            TopNNode.Step.SINGLE);
+                })
+                .get();
+
+        assertTrue(rewrittenPlan instanceof TopNNode);
+        TopNNode outerTopN = (TopNNode) rewrittenPlan;
+        assertEquals(outerTopN.getStep(), TopNNode.Step.SINGLE);
+        JoinNode rewrittenJoin = (JoinNode) outerTopN.getSource();
+        assertTrue(rewrittenJoin.getLeft() instanceof TopNNode);
+        assertEquals(((TopNNode) rewrittenJoin.getLeft()).getStep(), TopNNode.Step.SINGLE);
     }
 
     @DataProvider(name = "orderingTypes")
@@ -146,6 +340,7 @@ public class TestPushTopNThroughCardinalityPreservingJoin
                         new TaskCountEstimator(() -> 4)))
                 .setSystemProperty(JOIN_DISTRIBUTION_TYPE, "AUTOMATIC")
                 .setSystemProperty(IGNORE_STATS_CALCULATOR_FAILURES, "false")
+                .overrideStats(UNKNOWN_FACT_JOIN_ID, PlanNodeStatsEstimate.unknown())
                 .on(p -> {
                     JoinNode rewrittenJoin = directLookupJoinWithPushedTopN(p, orderingType);
                     assertEquals(rewrittenJoin.getDistributionType(), Optional.empty());
@@ -173,21 +368,42 @@ public class TestPushTopNThroughCardinalityPreservingJoin
 
     private JoinNode directLookupJoinWithPushedTopN(PlanBuilder planBuilder, Type orderingType)
     {
-        TopNNode originalTopN = (TopNNode) directLookupTopN(planBuilder, false, Optional.empty(), orderingType);
-        JoinNode originalJoin = (JoinNode) originalTopN.getSource();
-        TopNNode pushedTopN = new TopNNode(
-                originalTopN.getSourceLocation(),
-                planBuilder.getIdAllocator().getNextId(),
+        TopNNode originalFinal = (TopNNode) directLookupTopN(planBuilder, false, Optional.empty(), orderingType);
+        TopNNode originalPartial = (TopNNode) originalFinal.getSource();
+        JoinNode originalJoin = (JoinNode) originalPartial.getSource();
+        PlanNode unknownStatsSource = new JoinNode(
+                Optional.empty(),
+                new PlanNodeId(UNKNOWN_FACT_JOIN_ID),
+                INNER,
                 originalJoin.getLeft(),
-                originalTopN.getCount(),
-                originalTopN.getOrderingScheme(),
-                originalTopN.getStep());
+                planBuilder.values(1),
+                ImmutableList.of(),
+                originalJoin.getLeft().getOutputVariables(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                ImmutableMap.of());
+        TopNNode pushedPartial = new TopNNode(
+                originalPartial.getSourceLocation(),
+                planBuilder.getIdAllocator().getNextId(),
+                unknownStatsSource,
+                originalPartial.getCount(),
+                originalPartial.getOrderingScheme(),
+                originalPartial.getStep());
+        TopNNode pushedFinal = new TopNNode(
+                originalFinal.getSourceLocation(),
+                planBuilder.getIdAllocator().getNextId(),
+                pushedPartial,
+                originalFinal.getCount(),
+                originalFinal.getOrderingScheme(),
+                originalFinal.getStep());
 
         return new JoinNode(
                 originalJoin.getSourceLocation(),
                 planBuilder.getIdAllocator().getNextId(),
                 originalJoin.getType(),
-                pushedTopN,
+                pushedFinal,
                 originalJoin.getRight(),
                 originalJoin.getCriteria(),
                 originalJoin.getOutputVariables(),
@@ -204,6 +420,173 @@ public class TestPushTopNThroughCardinalityPreservingJoin
                 false);
     }
 
+    private PlanNode directLookupTopNWithPartialPushdown(PlanBuilder planBuilder, Type orderingType)
+    {
+        TopNNode originalFinal = (TopNNode) directLookupTopN(planBuilder, false, Optional.empty(), orderingType);
+        TopNNode originalPartial = (TopNNode) originalFinal.getSource();
+        JoinNode originalJoin = (JoinNode) originalPartial.getSource();
+        TopNNode pushedPartial = new TopNNode(
+                originalPartial.getSourceLocation(),
+                planBuilder.getIdAllocator().getNextId(),
+                originalJoin.getLeft(),
+                originalPartial.getCount(),
+                originalPartial.getOrderingScheme(),
+                TopNNode.Step.PARTIAL);
+        JoinNode lookupJoin = replaceLeft(planBuilder, originalJoin, pushedPartial);
+        return topNPair(planBuilder, lookupJoin, originalPartial.getCount(), originalPartial.getOrderingScheme());
+    }
+
+    private PlanNode nestedLookupTopN(PlanBuilder planBuilder, Type orderingType)
+    {
+        TopNNode directFinal = (TopNNode) directLookupTopN(planBuilder, false, Optional.empty(), orderingType);
+        TopNNode directPartial = (TopNNode) directFinal.getSource();
+        JoinNode nestedLookup = (JoinNode) directPartial.getSource();
+        VariableReferenceExpression factKey = planBuilder.variable("fact_key", BIGINT);
+        VariableReferenceExpression ordersKey = nestedLookup.getCriteria().get(0).getLeft();
+        JoinNode rootJoin = planBuilder.join(
+                INNER,
+                planBuilder.values(1, factKey),
+                nestedLookup,
+                new EquiJoinClause(factKey, ordersKey));
+        return topNPair(
+                planBuilder,
+                rootJoin,
+                directPartial.getCount(),
+                directPartial.getOrderingScheme());
+    }
+
+    private PlanNode projectedCompleteTopN(PlanBuilder planBuilder, Type orderingType, boolean computedOrdering)
+    {
+        TopNNode originalFinal = (TopNNode) directLookupTopN(planBuilder, false, Optional.empty(), orderingType);
+        TopNNode partialTopN = (TopNNode) originalFinal.getSource();
+        List<Ordering> partialOrderings = partialTopN.getOrderingScheme().getOrderBy();
+        VariableReferenceExpression orderingVariable = partialOrderings.get(0).getVariable();
+        VariableReferenceExpression orderingAlias = planBuilder.variable("ordering_alias", orderingType);
+        VariableReferenceExpression payload = planBuilder.variable("payload", BIGINT);
+
+        Assignments.Builder assignments = Assignments.builder();
+        for (VariableReferenceExpression output : partialTopN.getOutputVariables()) {
+            if (!output.equals(orderingVariable)) {
+                assignments.put(output, output);
+            }
+        }
+        assignments.put(
+                orderingAlias,
+                computedOrdering ?
+                        new ConstantExpression(orderingType.equals(DOUBLE) ? (Object) 1.0 : (Object) 100L, orderingType) :
+                        orderingVariable);
+        assignments.put(payload, new ConstantExpression(1L, BIGINT));
+        ProjectNode projection = planBuilder.project(partialTopN, assignments.build());
+
+        ImmutableList.Builder<Ordering> projectedOrderings = ImmutableList.builder();
+        projectedOrderings.add(new Ordering(orderingAlias, partialOrderings.get(0).getSortOrder()));
+        projectedOrderings.addAll(partialOrderings.subList(1, partialOrderings.size()));
+        return new TopNNode(
+                originalFinal.getSourceLocation(),
+                planBuilder.getIdAllocator().getNextId(),
+                projection,
+                originalFinal.getCount(),
+                new OrderingScheme(projectedOrderings.build()),
+                TopNNode.Step.FINAL);
+    }
+
+    private PlanNode duplicateProjectedOrderingTopN(PlanBuilder planBuilder)
+    {
+        TopNNode originalFinal = (TopNNode) directLookupTopN(planBuilder, false, Optional.empty(), DOUBLE);
+        TopNNode partialTopN = (TopNNode) originalFinal.getSource();
+        VariableReferenceExpression orderingVariable = partialTopN.getOrderingScheme().getOrderByVariables().get(0);
+        VariableReferenceExpression firstAlias = planBuilder.variable("first_ordering_alias", DOUBLE);
+        VariableReferenceExpression secondAlias = planBuilder.variable("second_ordering_alias", DOUBLE);
+
+        Assignments.Builder assignments = Assignments.builder();
+        for (VariableReferenceExpression output : partialTopN.getOutputVariables()) {
+            if (!output.equals(orderingVariable)) {
+                assignments.put(output, output);
+            }
+        }
+        assignments.put(firstAlias, orderingVariable);
+        assignments.put(secondAlias, orderingVariable);
+        ProjectNode projection = planBuilder.project(partialTopN, assignments.build());
+
+        return new TopNNode(
+                originalFinal.getSourceLocation(),
+                planBuilder.getIdAllocator().getNextId(),
+                projection,
+                originalFinal.getCount(),
+                new OrderingScheme(ImmutableList.of(
+                        new Ordering(firstAlias, DESC_NULLS_LAST),
+                        new Ordering(secondAlias, DESC_NULLS_LAST))),
+                TopNNode.Step.FINAL);
+    }
+
+    private PlanNode directLookupTopNWithSinglePushdown(PlanBuilder planBuilder, Type orderingType)
+    {
+        TopNNode originalFinal = (TopNNode) directLookupTopN(planBuilder, false, Optional.empty(), orderingType);
+        TopNNode originalPartial = (TopNNode) originalFinal.getSource();
+        JoinNode originalJoin = (JoinNode) originalPartial.getSource();
+        TopNNode pushedSingle = new TopNNode(
+                originalPartial.getSourceLocation(),
+                planBuilder.getIdAllocator().getNextId(),
+                originalJoin.getLeft(),
+                originalPartial.getCount(),
+                originalPartial.getOrderingScheme(),
+                TopNNode.Step.SINGLE);
+        JoinNode lookupJoin = replaceLeft(planBuilder, originalJoin, pushedSingle);
+        return topNPair(planBuilder, lookupJoin, originalPartial.getCount(), originalPartial.getOrderingScheme());
+    }
+
+    private PlanNode directLookupTopNWithCompletePushdown(PlanBuilder planBuilder, Type orderingType)
+    {
+        JoinNode lookupJoin = directLookupJoinWithPushedTopN(planBuilder, orderingType);
+        TopNNode innerFinal = (TopNNode) lookupJoin.getLeft();
+        return topNPair(planBuilder, lookupJoin, innerFinal.getCount(), innerFinal.getOrderingScheme());
+    }
+
+    private PlanNode topNPair(
+            PlanBuilder planBuilder,
+            PlanNode source,
+            long count,
+            OrderingScheme orderingScheme)
+    {
+        TopNNode outerPartial = new TopNNode(
+                Optional.empty(),
+                planBuilder.getIdAllocator().getNextId(),
+                source,
+                count,
+                orderingScheme,
+                TopNNode.Step.PARTIAL);
+        return new TopNNode(
+                Optional.empty(),
+                planBuilder.getIdAllocator().getNextId(),
+                outerPartial,
+                outerPartial.getCount(),
+                outerPartial.getOrderingScheme(),
+                TopNNode.Step.FINAL);
+    }
+
+    private JoinNode replaceLeft(PlanBuilder planBuilder, JoinNode join, PlanNode left)
+    {
+        return new JoinNode(
+                join.getSourceLocation(),
+                planBuilder.getIdAllocator().getNextId(),
+                join.getType(),
+                left,
+                join.getRight(),
+                join.getCriteria(),
+                join.getOutputVariables(),
+                join.getFilter(),
+                join.getLeftHashVariable(),
+                join.getRightHashVariable(),
+                join.getDistributionType(),
+                join.getDynamicFilters(),
+                join.isLeftKeysUnique(),
+                join.isRightKeysUnique(),
+                join.isLeftKeysNonNull(),
+                join.isRightKeysNonNull(),
+                join.isLeftKeysCoveredByRightKeys(),
+                join.isRightKeysCoveredByLeftKeys());
+    }
+
     private PlanNode directLookupTopN(
             PlanBuilder planBuilder,
             boolean lookupOnLeft,
@@ -212,6 +595,7 @@ public class TestPushTopNThroughCardinalityPreservingJoin
     {
         VariableReferenceExpression oCustkey = planBuilder.variable("o_custkey", BIGINT);
         VariableReferenceExpression sortKey = planBuilder.variable("sort_key", orderingType);
+        VariableReferenceExpression sortTieKey = planBuilder.variable("sort_tie_key", BIGINT);
         VariableReferenceExpression cCustkey = planBuilder.variable("c_custkey", BIGINT);
 
         TableScanNode orders = planBuilder.tableScan(
@@ -237,6 +621,7 @@ public class TestPushTopNThroughCardinalityPreservingJoin
                         .put(sortKey, new ConstantExpression(
                                 orderingType.equals(DOUBLE) ? (Object) 1.0 : (Object) 100L,
                                 orderingType))
+                        .put(sortTieKey, new ConstantExpression(1L, BIGINT))
                         .build());
         TableScanNode customer = planBuilder.tableScan(
                 customerTableHandle,
@@ -273,13 +658,22 @@ public class TestPushTopNThroughCardinalityPreservingJoin
                 true,
                 true);
 
-        return new TopNNode(
+        TopNNode partialTopN = new TopNNode(
                 Optional.empty(),
                 planBuilder.getIdAllocator().getNextId(),
                 lookupJoin,
                 100,
-                new OrderingScheme(ImmutableList.of(new Ordering(sortKey, DESC_NULLS_LAST))),
+                new OrderingScheme(ImmutableList.of(
+                        new Ordering(sortKey, DESC_NULLS_LAST),
+                        new Ordering(sortTieKey, ASC_NULLS_LAST))),
                 TopNNode.Step.PARTIAL);
+        return new TopNNode(
+                Optional.empty(),
+                planBuilder.getIdAllocator().getNextId(),
+                partialTopN,
+                partialTopN.getCount(),
+                partialTopN.getOrderingScheme(),
+                TopNNode.Step.FINAL);
     }
 
     private List<TableConstraint<ColumnHandle>> constraintsWith(TableHandle tableHandle, TableConstraint<ColumnHandle> constraint)
