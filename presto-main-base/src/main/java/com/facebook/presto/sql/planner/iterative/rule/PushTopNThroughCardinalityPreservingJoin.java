@@ -52,29 +52,37 @@ import static java.util.Collections.emptyMap;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Pushes a logical or partial TopN below an inner lookup join when trusted
- * constraints prove that the lookup is cardinality preserving.
+ * Pushes a SINGLE or PARTIAL TopN below an inner lookup join when trusted
+ * constraints prove that the lookup is cardinality preserving. For a matching
+ * FINAL(PARTIAL) pair, the pushed TopN is completed before the join so its
+ * cardinality is globally bounded even when the source statistics are unknown.
+ * Projections between FINAL and PARTIAL may rename ordering symbols; these are
+ * mapped through direct variable assignments and retained by the rewrite.
  *
  * The rule targets shapes like:
  *
  * <pre>
- * - TopN(order by A/O columns)
- *   - Join(A.key = O.key)
- *     - A
- *     - Join(O.lookup_key = L.lookup_key)
- *       - O -- trusted FK to L
- *       - L -- trusted unique/PK lookup key
+ * - FinalTopN
+ *   - PartialTopN(order by A/O columns)
+ *     - Join(A.key = O.key)
+ *       - A
+ *       - Join(O.lookup_key = L.lookup_key)
+ *         - O -- trusted FK to L
+ *         - L -- trusted unique/PK lookup key
  * </pre>
  *
  * and rewrites them to:
  *
  * <pre>
- * - Join(O.lookup_key = L.lookup_key)
- *   - TopN(order by A/O columns)
- *     - Join(A.key = O.key)
- *       - A
- *       - O
- *   - L
+ * - FinalTopN
+ *   - PartialTopN
+ *     - Join(O.lookup_key = L.lookup_key)
+ *       - FinalTopN
+ *         - PartialTopN(order by A/O columns)
+ *           - Join(A.key = O.key)
+ *             - A
+ *             - O
+ *       - L
  * </pre>
  *
  * This is only safe if the lookup join cannot drop or duplicate rows. We prove
@@ -103,35 +111,78 @@ public class PushTopNThroughCardinalityPreservingJoin
     @Override
     public Result apply(TopNNode topN, Captures captures, Context context)
     {
-        if (topN.getStep() == TopNNode.Step.FINAL) {
-            return Result.empty();
-        }
-
+        TopNNode topNToPush = topN;
+        boolean completePushedTopN = false;
+        ImmutableList.Builder<ProjectNode> projectsBetweenFinalAndPartial = ImmutableList.builder();
         PlanNode source = context.getLookup().resolve(topN.getSource());
-        if (source instanceof ProjectNode) {
-            return tryPushThroughProject(topN, (ProjectNode) source, context)
-                    .map(Result::ofPlanNode)
-                    .orElseGet(Result::empty);
+        if (topN.getStep() == TopNNode.Step.FINAL) {
+            OrderingScheme partialOrderingScheme = topN.getOrderingScheme();
+            while (source instanceof ProjectNode) {
+                ProjectNode project = (ProjectNode) source;
+                Optional<OrderingScheme> mappedOrderingScheme = mapOrderingThroughProject(
+                        partialOrderingScheme,
+                        project);
+                if (!mappedOrderingScheme.isPresent()) {
+                    return Result.empty();
+                }
+                partialOrderingScheme = mappedOrderingScheme.get();
+                projectsBetweenFinalAndPartial.add(project);
+                source = context.getLookup().resolve(project.getSource());
+            }
+
+            if (!(source instanceof TopNNode)) {
+                return Result.empty();
+            }
+
+            TopNNode partialTopN = (TopNNode) source;
+            if (partialTopN.getStep() != TopNNode.Step.PARTIAL ||
+                    partialTopN.getCount() != topN.getCount() ||
+                    !partialTopN.getOrderingScheme().equals(partialOrderingScheme)) {
+                return Result.empty();
+            }
+
+            topNToPush = partialTopN;
+            completePushedTopN = true;
+            source = context.getLookup().resolve(partialTopN.getSource());
         }
 
-        if (!(source instanceof JoinNode)) {
+        Optional<PlanNode> rewritten;
+        if (source instanceof ProjectNode) {
+            rewritten = tryPushThroughProject(topNToPush, (ProjectNode) source, completePushedTopN, context);
+        }
+        else if (source instanceof JoinNode) {
+            rewritten = tryPushThroughJoin(topNToPush, (JoinNode) source, completePushedTopN, context);
+        }
+        else {
             return Result.empty();
         }
 
-        return tryPushThroughJoin(topN, (JoinNode) source, context)
-                .map(Result::ofPlanNode)
-                .orElseGet(Result::empty);
+        if (!rewritten.isPresent()) {
+            return Result.empty();
+        }
+
+        if (completePushedTopN) {
+            PlanNode rewrittenSource = rewritten.get();
+            List<ProjectNode> projects = projectsBetweenFinalAndPartial.build();
+            for (int index = projects.size() - 1; index >= 0; index--) {
+                rewrittenSource = projects.get(index).replaceChildren(ImmutableList.of(rewrittenSource));
+            }
+            return Result.ofPlanNode(topN.replaceChildren(ImmutableList.of(rewrittenSource)));
+        }
+        return Result.ofPlanNode(rewritten.get());
     }
 
-    private Optional<PlanNode> tryPushThroughProject(TopNNode topN, ProjectNode project, Context context)
+    private Optional<PlanNode> tryPushThroughProject(
+            TopNNode topN,
+            ProjectNode project,
+            boolean completePushedTopN,
+            Context context)
     {
-        ImmutableList.Builder<Ordering> orderBy = ImmutableList.builder();
-        for (Ordering ordering : topN.getOrderingScheme().getOrderBy()) {
-            RowExpression assignment = project.getAssignments().get(ordering.getVariable());
-            if (!(assignment instanceof VariableReferenceExpression)) {
-                return Optional.empty();
-            }
-            orderBy.add(new Ordering((VariableReferenceExpression) assignment, ordering.getSortOrder()));
+        Optional<OrderingScheme> mappedOrderingScheme = mapOrderingThroughProject(
+                topN.getOrderingScheme(),
+                project);
+        if (!mappedOrderingScheme.isPresent()) {
+            return Optional.empty();
         }
 
         TopNNode mappedTopN = new TopNNode(
@@ -139,7 +190,7 @@ public class PushTopNThroughCardinalityPreservingJoin
                 context.getIdAllocator().getNextId(),
                 context.getLookup().resolve(project.getSource()),
                 topN.getCount(),
-                new OrderingScheme(orderBy.build()),
+                mappedOrderingScheme.get(),
                 topN.getStep());
 
         PlanNode projectSource = context.getLookup().resolve(mappedTopN.getSource());
@@ -147,7 +198,7 @@ public class PushTopNThroughCardinalityPreservingJoin
             return Optional.empty();
         }
 
-        Optional<PlanNode> rewritten = tryPushThroughJoin(mappedTopN, (JoinNode) projectSource, context);
+        Optional<PlanNode> rewritten = tryPushThroughJoin(mappedTopN, (JoinNode) projectSource, completePushedTopN, context);
         if (!rewritten.isPresent()) {
             return Optional.empty();
         }
@@ -160,23 +211,48 @@ public class PushTopNThroughCardinalityPreservingJoin
                 project.getLocality()));
     }
 
-    private Optional<PlanNode> tryPushThroughJoin(TopNNode topN, JoinNode rootJoin, Context context)
+    private Optional<OrderingScheme> mapOrderingThroughProject(
+            OrderingScheme orderingScheme,
+            ProjectNode project)
+    {
+        ImmutableList.Builder<Ordering> orderBy = ImmutableList.builder();
+        Set<VariableReferenceExpression> mappedVariables = new LinkedHashSet<>();
+        for (Ordering ordering : orderingScheme.getOrderBy()) {
+            RowExpression assignment = project.getAssignments().get(ordering.getVariable());
+            if (!(assignment instanceof VariableReferenceExpression)) {
+                return Optional.empty();
+            }
+
+            VariableReferenceExpression mappedVariable = (VariableReferenceExpression) assignment;
+            if (!mappedVariables.add(mappedVariable)) {
+                return Optional.empty();
+            }
+            orderBy.add(new Ordering(mappedVariable, ordering.getSortOrder()));
+        }
+        return Optional.of(new OrderingScheme(orderBy.build()));
+    }
+
+    private Optional<PlanNode> tryPushThroughJoin(
+            TopNNode topN,
+            JoinNode rootJoin,
+            boolean completePushedTopN,
+            Context context)
     {
         if (!isPlainInnerJoin(rootJoin)) {
             return Optional.empty();
         }
 
-        Optional<PlanNode> rewritten = tryPushThroughDirectLookup(topN, rootJoin, true, context);
+        Optional<PlanNode> rewritten = tryPushThroughDirectLookup(topN, rootJoin, true, completePushedTopN, context);
         if (!rewritten.isPresent()) {
-            rewritten = tryPushThroughDirectLookup(topN, rootJoin, false, context);
+            rewritten = tryPushThroughDirectLookup(topN, rootJoin, false, completePushedTopN, context);
         }
         if (rewritten.isPresent()) {
             return rewritten;
         }
 
-        rewritten = tryPushThroughNestedLookup(topN, rootJoin, true, context);
+        rewritten = tryPushThroughNestedLookup(topN, rootJoin, true, completePushedTopN, context);
         if (!rewritten.isPresent()) {
-            rewritten = tryPushThroughNestedLookup(topN, rootJoin, false, context);
+            rewritten = tryPushThroughNestedLookup(topN, rootJoin, false, completePushedTopN, context);
         }
         return rewritten;
     }
@@ -185,6 +261,7 @@ public class PushTopNThroughCardinalityPreservingJoin
             TopNNode topN,
             JoinNode join,
             boolean lookupOnLeft,
+            boolean completePushedTopN,
             Context context)
     {
         Optional<LookupSplit> split = trySplitLookupJoin(join, lookupOnLeft, context.getSession(), context);
@@ -194,7 +271,8 @@ public class PushTopNThroughCardinalityPreservingJoin
 
         PlanNode baseSide = split.get().getBaseSide();
         PlanNode lookupSide = split.get().getLookupSide();
-        if (hasSameTopN(baseSide, topN)) {
+        if (hasSameCompleteTopN(baseSide, topN, context) ||
+                (!completePushedTopN && hasSameTopN(baseSide, topN))) {
             return Optional.empty();
         }
         if (!baseSide.getOutputVariables().containsAll(topN.getOrderingScheme().getOrderByVariables())) {
@@ -208,13 +286,7 @@ public class PushTopNThroughCardinalityPreservingJoin
             }
         }
 
-        TopNNode pushedTopN = new TopNNode(
-                topN.getSourceLocation(),
-                context.getIdAllocator().getNextId(),
-                baseSide,
-                topN.getCount(),
-                topN.getOrderingScheme(),
-                topN.getStep());
+        PlanNode pushedTopN = createPushedTopN(topN, baseSide, completePushedTopN, context);
 
         PlanNode finalLeft = lookupOnLeft ? lookupSide : pushedTopN;
         PlanNode finalRight = lookupOnLeft ? pushedTopN : lookupSide;
@@ -277,10 +349,61 @@ public class PushTopNThroughCardinalityPreservingJoin
                 existing.getOrderingScheme().equals(topN.getOrderingScheme());
     }
 
+    private boolean hasSameCompleteTopN(PlanNode node, TopNNode partialTopN, Context context)
+    {
+        node = context.getLookup().resolve(node);
+        if (partialTopN.getStep() != TopNNode.Step.PARTIAL || !(node instanceof TopNNode)) {
+            return false;
+        }
+
+        TopNNode completeTopN = (TopNNode) node;
+        return (completeTopN.getStep() == TopNNode.Step.SINGLE || completeTopN.getStep() == TopNNode.Step.FINAL) &&
+                completeTopN.getCount() == partialTopN.getCount() &&
+                completeTopN.getOrderingScheme().equals(partialTopN.getOrderingScheme());
+    }
+
+    private PlanNode createPushedTopN(
+            TopNNode topN,
+            PlanNode source,
+            boolean completePushedTopN,
+            Context context)
+    {
+        TopNNode pushedTopN;
+        if (completePushedTopN && hasSameTopN(source, topN)) {
+            pushedTopN = (TopNNode) source;
+        }
+        else {
+            pushedTopN = new TopNNode(
+                    topN.getSourceLocation(),
+                    context.getIdAllocator().getNextId(),
+                    source,
+                    topN.getCount(),
+                    topN.getOrderingScheme(),
+                    topN.getStep());
+        }
+
+        if (!completePushedTopN) {
+            return pushedTopN;
+        }
+
+        // PARTIAL is bounded per driver, not for the whole query. Complete it
+        // before the lookup so the rewritten join has a provably bounded side
+        // even when the base statistics are unknown. The original outer pair
+        // remains in place because the lookup join does not preserve ordering.
+        return new TopNNode(
+                topN.getSourceLocation(),
+                context.getIdAllocator().getNextId(),
+                pushedTopN,
+                topN.getCount(),
+                topN.getOrderingScheme(),
+                TopNNode.Step.FINAL);
+    }
+
     private Optional<PlanNode> tryPushThroughNestedLookup(
             TopNNode topN,
             JoinNode rootJoin,
             boolean nestedOnLeft,
+            boolean completePushedTopN,
             Context context)
     {
         PlanNode rootLeft = context.getLookup().resolve(rootJoin.getLeft());
@@ -359,13 +482,7 @@ public class PushTopNThroughCardinalityPreservingJoin
                 Optional.empty(),
                 emptyMap());
 
-        TopNNode pushedTopN = new TopNNode(
-                topN.getSourceLocation(),
-                context.getIdAllocator().getNextId(),
-                earlyJoin,
-                topN.getCount(),
-                topN.getOrderingScheme(),
-                topN.getStep());
+        PlanNode pushedTopN = createPushedTopN(topN, earlyJoin, completePushedTopN, context);
 
         Optional<List<EquiJoinClause>> finalCriteria = orientCriteria(split.get().getLookupCriteria(), pushedTopN, lookupSide);
         if (!finalCriteria.isPresent()) {
@@ -489,6 +606,10 @@ public class PushTopNThroughCardinalityPreservingJoin
 
         if (node instanceof FilterNode) {
             return traceSourceKeysToTableKeys(((FilterNode) node).getSource(), keys, session, context);
+        }
+
+        if (node instanceof TopNNode) {
+            return traceSourceKeysToTableKeys(((TopNNode) node).getSource(), keys, session, context);
         }
 
         if (node instanceof AggregationNode) {
