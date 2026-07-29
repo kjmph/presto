@@ -62,7 +62,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
 
 import static com.facebook.presto.SystemSessionProperties.confidenceBasedBroadcastEnabled;
 import static com.facebook.presto.SystemSessionProperties.getJoinDistributionType;
@@ -201,8 +200,11 @@ public class ReorderJoins
         private final LogicalRowExpressions logicalRowExpressions;
         private final Lookup lookup;
         private final Context context;
+        private final List<RowExpression> nonInferableConjuncts;
 
         private final Map<Set<PlanNode>, JoinEnumerationResult> memo = new HashMap<>();
+        private final Map<Set<VariableReferenceExpression>, List<RowExpression>> scopedNonInferableConjuncts = new HashMap<>();
+        private final Map<Set<VariableReferenceExpression>, EqualityInference> scopedJoinInference = new HashMap<>();
         private final FunctionResolution functionResolution;
 
         @VisibleForTesting
@@ -219,6 +221,7 @@ public class ReorderJoins
             this.metadata = requireNonNull(metadata, "metadata is null");
             this.allFilterInference = createEqualityInference(metadata, filter);
             this.logicalRowExpressions = new LogicalRowExpressions(determinismEvaluator, functionResolution, metadata.getFunctionAndTypeManager());
+            this.nonInferableConjuncts = ImmutableList.copyOf(new EqualityInference.Builder(metadata).nonInferableConjuncts(allFilter));
             this.functionResolution = functionResolution;
         }
 
@@ -386,15 +389,20 @@ public class ReorderJoins
         private List<RowExpression> getJoinPredicates(Set<VariableReferenceExpression> leftVariables, Set<VariableReferenceExpression> rightVariables)
         {
             ImmutableList.Builder<RowExpression> joinPredicatesBuilder = ImmutableList.builder();
+            Set<VariableReferenceExpression> availableVariables = ImmutableSet.<VariableReferenceExpression>builder()
+                    .addAll(leftVariables)
+                    .addAll(rightVariables)
+                    .build();
+
             // This takes all conjuncts that were part of allFilters that
             // could not be used for equality inference.
             // If they use both the left and right variables, we add them to the list of joinPredicates
-            EqualityInference.Builder builder = new EqualityInference.Builder(metadata);
-            StreamSupport.stream(builder.nonInferableConjuncts(allFilter).spliterator(), false)
-                    .map(conjunct -> allFilterInference.rewriteExpression(
-                            conjunct,
-                            variable -> leftVariables.contains(variable) || rightVariables.contains(variable)))
-                    .filter(Objects::nonNull)
+            scopedNonInferableConjuncts.computeIfAbsent(availableVariables, variables ->
+                    nonInferableConjuncts.stream()
+                            .map(conjunct -> allFilterInference.rewriteExpression(conjunct, variables::contains))
+                            .filter(Objects::nonNull)
+                            .collect(toImmutableList()))
+                    .stream()
                     // filter expressions that contain only left or right variables
                     .filter(conjunct -> allFilterInference.rewriteExpression(conjunct, leftVariables::contains) == null)
                     .filter(conjunct -> allFilterInference.rewriteExpression(conjunct, rightVariables::contains) == null)
@@ -402,9 +410,10 @@ public class ReorderJoins
 
             // create equality inference on available variables
             // TODO: make generateEqualitiesPartitionedBy take left and right scope
-            List<RowExpression> joinEqualities = allFilterInference.generateEqualitiesPartitionedBy(
-                    variable -> leftVariables.contains(variable) || rightVariables.contains(variable)).getScopeEqualities();
-            EqualityInference joinInference = createEqualityInference(metadata, joinEqualities.toArray(new RowExpression[0]));
+            EqualityInference joinInference = scopedJoinInference.computeIfAbsent(availableVariables, variables -> {
+                List<RowExpression> joinEqualities = allFilterInference.generateEqualitiesPartitionedBy(variables::contains).getScopeEqualities();
+                return createEqualityInference(metadata, joinEqualities.toArray(new RowExpression[0]));
+            });
             joinPredicatesBuilder.addAll(joinInference.generateEqualitiesPartitionedBy(in(leftVariables)).getScopeStraddlingEqualities());
 
             return joinPredicatesBuilder.build();
@@ -416,8 +425,7 @@ public class ReorderJoins
                 PlanNode planNode = nodes.stream().collect(onlyElement());
                 ImmutableList.Builder<RowExpression> predicates = ImmutableList.builder();
                 predicates.addAll(allFilterInference.generateEqualitiesPartitionedBy(outputVariables::contains).getScopeEqualities());
-                EqualityInference.Builder builder = new EqualityInference.Builder(metadata);
-                StreamSupport.stream(builder.nonInferableConjuncts(allFilter).spliterator(), false)
+                nonInferableConjuncts.stream()
                         .map(conjunct -> allFilterInference.rewriteExpression(conjunct, outputVariables::contains))
                         .filter(Objects::nonNull)
                         .forEach(predicates::add);
