@@ -68,6 +68,7 @@ public class StatsCalculatorModule
         rules.add(new FilterStatsRule(normalizer, filterStatsCalculator));
         rules.add(new ValuesStatsRule(metadata, expressionOptimizerManager));
         rules.add(new LimitStatsRule(normalizer));
+        rules.add(new TopNStatsRule(normalizer));
         rules.add(new EnforceSingleRowStatsRule(normalizer));
         rules.add(new ProjectStatsRule(scalarStatsCalculator, normalizer));
         rules.add(new ExchangeStatsRule(normalizer));
