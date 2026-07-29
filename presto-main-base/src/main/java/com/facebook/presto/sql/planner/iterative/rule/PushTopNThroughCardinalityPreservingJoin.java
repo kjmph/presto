@@ -227,19 +227,34 @@ public class PushTopNThroughCardinalityPreservingJoin
             return Optional.empty();
         }
 
+        // TopN keeps uniqueness and nullability on both sides. It also keeps
+        // every remaining base key covered by the lookup, but can remove the
+        // last base row for a lookup key and invalidate coverage in reverse.
+        boolean leftKeysCoveredByRightKeys = !lookupOnLeft && join.isLeftKeysCoveredByRightKeys();
+        boolean rightKeysCoveredByLeftKeys = lookupOnLeft && join.isRightKeysCoveredByLeftKeys();
+
+        // Pushing TopN changes the child cardinality. Discard any distribution
+        // selected for the old shape so DetermineJoinDistributionType can cost
+        // both orientations of the rewritten join using the bounded TopN stats.
         JoinNode finalJoin = new JoinNode(
                 join.getSourceLocation(),
                 context.getIdAllocator().getNextId(),
-                JoinType.INNER,
+                join.getType(),
                 finalLeft,
                 finalRight,
                 finalCriteria.get(),
                 join.getOutputVariables(),
+                join.getFilter(),
+                join.getLeftHashVariable(),
+                join.getRightHashVariable(),
                 Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                emptyMap());
+                emptyMap(),
+                join.isLeftKeysUnique(),
+                join.isRightKeysUnique(),
+                join.isLeftKeysNonNull(),
+                join.isRightKeysNonNull(),
+                leftKeysCoveredByRightKeys,
+                rightKeysCoveredByLeftKeys);
 
         return Optional.of(new TopNNode(
                 topN.getSourceLocation(),
