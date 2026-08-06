@@ -1045,7 +1045,7 @@ public final class SystemSessionProperties
                         false),
                 booleanProperty(
                         PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN,
-                        "Push complete aggregations below inner joins with a unique lookup side",
+                        "Enable cost-based pushdown of complete aggregations below inner joins with a unique lookup side",
                         featuresConfig.isPushAggregationThroughUniqueLookupJoin(),
                         false),
                 booleanProperty(

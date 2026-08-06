@@ -1043,6 +1043,35 @@ queries that have very selective joins.
 
 The corresponding session property is :ref:`admin/properties-session:\`\`push_aggregation_through_join\`\``.
 
+``optimizer.push-aggregation-through-unique-lookup-join``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* **Type:** ``boolean``
+* **Default value:** ``true``
+
+When enabled, Presto can push a complete aggregation below an inner join when planner
+logical properties prove that the lookup side is unique on the join keys. This proof can
+come from grouping or distinctness in the plan, or from a trusted primary-key or unique
+constraint. The grouping keys must include all fact-side join keys, and the aggregation
+must use only fact-side input. The lookup join is retained, so lookup-side filters
+continue to restrict the result and a foreign-key constraint is not required.
+
+The decision is statistics based and guarded. Presto requires known source,
+grouped-output, and post-lookup cardinality estimates; known source size; decomposable
+aggregation functions; fixed-width grouping keys and intermediate aggregation state;
+and substantial estimated reductions in rows and aggregation-state bytes. Partial
+aggregation must be enabled, and the estimated per-task aggregation state must fit
+within the query memory budget. This is a per-operator safety estimate rather than a
+query-wide memory guarantee. Broadcast lookups use a stricter reduction threshold; with
+automatic join distribution, broadcast-eligible lookups are evaluated conservatively
+using that threshold. If these conditions are not met, Presto preserves the original
+lookup-first plan.
+
+Set this property to ``false`` to disable the optimization, for example as an operational
+kill switch or when comparing plans during performance testing.
+
+The corresponding session property is :ref:`admin/properties-session:\`\`push_aggregation_through_unique_lookup_join\`\``.
+
 ``optimizer.push-partial-aggregation-through-join``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

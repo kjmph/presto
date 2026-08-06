@@ -163,7 +163,7 @@ public class FeaturesConfig
     private boolean rewriteGroupedNotEqualExistsToFilteredSemiJoin;
     private boolean rewriteRepeatedScalarSumToGroupedScalarFilter;
     private boolean pushPartialAggregationThroughJoin;
-    private boolean pushAggregationThroughUniqueLookupJoin;
+    private boolean pushAggregationThroughUniqueLookupJoin = true;
     private boolean pushSemiJoinThroughUnion;
     private boolean pushAggregationThroughDisjointUnion;
     private boolean optimizeCascadingFiltersAndProjections;
@@ -1892,7 +1892,7 @@ public class FeaturesConfig
     }
 
     @Config("optimizer.push-aggregation-through-unique-lookup-join")
-    @ConfigDescription("Push complete aggregations below inner joins with a unique lookup side")
+    @ConfigDescription("Enable cost-based pushdown of complete aggregations below inner joins with a unique lookup side")
     public FeaturesConfig setPushAggregationThroughUniqueLookupJoin(boolean pushAggregationThroughUniqueLookupJoin)
     {
         this.pushAggregationThroughUniqueLookupJoin = pushAggregationThroughUniqueLookupJoin;

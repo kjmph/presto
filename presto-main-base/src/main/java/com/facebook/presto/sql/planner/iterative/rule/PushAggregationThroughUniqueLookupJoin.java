@@ -14,6 +14,10 @@
 package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.common.type.FixedWidthType;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.cost.PlanNodeStatsEstimate;
+import com.facebook.presto.cost.TaskCountEstimator;
 import com.facebook.presto.matching.Capture;
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
@@ -36,11 +40,25 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.facebook.presto.SystemSessionProperties.getJoinDistributionType;
+import static com.facebook.presto.SystemSessionProperties.getPartialAggregationByteReductionThreshold;
+import static com.facebook.presto.SystemSessionProperties.getPartialAggregationStrategy;
+import static com.facebook.presto.SystemSessionProperties.getQueryMaxMemoryPerNode;
 import static com.facebook.presto.SystemSessionProperties.isExploitConstraints;
 import static com.facebook.presto.SystemSessionProperties.isPushAggregationThroughUniqueLookupJoin;
+import static com.facebook.presto.SystemSessionProperties.isSingleNodeExecutionEnabled;
+import static com.facebook.presto.cost.AggregationStatsRule.groupBy;
+import static com.facebook.presto.operator.aggregation.AggregationUtils.isDecomposable;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.SINGLE;
+import static com.facebook.presto.spi.plan.JoinDistributionType.REPLICATED;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.BROADCAST;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.PARTITIONED;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.PartialAggregationStrategy.AUTOMATIC;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.PartialAggregationStrategy.NEVER;
 import static com.facebook.presto.sql.planner.iterative.rule.AnnotateJoinNodeWithUniqueKeys.areJoinKeysUnique;
+import static com.facebook.presto.sql.planner.iterative.rule.DetermineJoinDistributionType.isBelowMaxBroadcastSize;
 import static com.facebook.presto.sql.planner.optimizations.AggregationNodeUtils.extractAggregationUniqueVariables;
+import static com.facebook.presto.sql.planner.optimizations.QueryCardinalityUtil.isAtMostScalar;
 import static com.facebook.presto.sql.planner.plan.Patterns.aggregation;
 import static com.facebook.presto.sql.planner.plan.Patterns.join;
 import static com.facebook.presto.sql.planner.plan.Patterns.project;
@@ -58,7 +76,7 @@ import static java.util.Objects.requireNonNull;
  *   - Project(fact expressions)
  *     - Join(fact.fact_key = lookup.key)
  *       - fact
- *       - filtered lookup -- trusted unique/PK on key
+ *       - filtered lookup -- planner-proven unique on key
  * </pre>
  *
  * this rule produces:
@@ -74,13 +92,32 @@ import static java.util.Objects.requireNonNull;
  * The lookup join is retained. It can therefore continue to filter fact keys,
  * but uniqueness proves that it cannot duplicate rows within a fact-key group.
  * A foreign key does not prove coverage after a lookup-side filter and is not
- * required for this transformation. Profitability depends on how many lookup
- * keys survive that filter, so the rule has a separate default-off gate until
- * aggregation cardinality and memory estimates can support an automatic choice.
+ * required for this transformation. Existing dynamic filters remain valid
+ * because all fact-side join keys are grouping keys and aggregation preserves
+ * the join-key domains.
+ *
+ * The rule uses source, grouping, and join cardinality estimates to require a
+ * substantial reduction before the lookup. Lookup sides that can be broadcast,
+ * and therefore do not require repartitioning the fact side, use a stricter
+ * selectivity threshold. It also requires useful partial aggregation and bounds
+ * estimated intermediate state per worker for this operator. This is a local
+ * safety guard rather than a query-wide memory model. Unknown estimates,
+ * variable-width state, insufficient memory headroom, and marginal reductions
+ * preserve the original lookup-first plan.
  */
 public class PushAggregationThroughUniqueLookupJoin
         implements Rule<AggregationNode>
 {
+    private static final double MAX_GROUPS_TO_SOURCE_ROWS_RATIO = 0.50;
+    private static final double MAX_GROUPS_TO_PARTITIONED_JOIN_ROWS_RATIO = 0.80;
+    private static final double MAX_GROUPS_TO_REPLICATED_JOIN_ROWS_RATIO = 0.50;
+    private static final double MAX_AGGREGATION_STATE_TO_SOURCE_BYTES_RATIO = 0.50;
+    private static final double AGGREGATION_STATE_MEMORY_OVERHEAD = 2.0;
+    // Hash-table and row-container metadata impose a floor even when logical
+    // grouping keys and aggregation state are only a few bytes wide.
+    private static final double MIN_HASH_AGGREGATION_MEMORY_BYTES_PER_GROUP = 64.0;
+    private static final double MAX_AGGREGATION_MEMORY_FRACTION = 0.60;
+
     private static final Capture<JoinNode> JOIN = Capture.newCapture();
     private static final Capture<JoinNode> PROJECTED_JOIN = Capture.newCapture();
 
@@ -93,11 +130,21 @@ public class PushAggregationThroughUniqueLookupJoin
             .with(source().matching(project()
                     .with(source().matching(join().capturedAs(PROJECTED_JOIN)))));
 
+    private final FunctionAndTypeManager functionAndTypeManager;
+    private final TaskCountEstimator taskCountEstimator;
     private final DeterminismEvaluator determinismEvaluator;
 
+    public PushAggregationThroughUniqueLookupJoin(FunctionAndTypeManager functionAndTypeManager, TaskCountEstimator taskCountEstimator)
+    {
+        this.functionAndTypeManager = requireNonNull(functionAndTypeManager, "functionAndTypeManager is null");
+        this.taskCountEstimator = requireNonNull(taskCountEstimator, "taskCountEstimator is null");
+        this.determinismEvaluator = new RowExpressionDeterminismEvaluator(functionAndTypeManager);
+    }
+
+    @VisibleForTesting
     public PushAggregationThroughUniqueLookupJoin(FunctionAndTypeManager functionAndTypeManager)
     {
-        this.determinismEvaluator = new RowExpressionDeterminismEvaluator(requireNonNull(functionAndTypeManager, "functionAndTypeManager is null"));
+        this(functionAndTypeManager, new TaskCountEstimator(() -> 1));
     }
 
     public Iterable<Rule<?>> rules()
@@ -124,27 +171,34 @@ public class PushAggregationThroughUniqueLookupJoin
     }
 
     @Override
+    public boolean isCostBased(Session session)
+    {
+        return true;
+    }
+
+    @Override
     public Result apply(AggregationNode aggregation, Captures captures, Context context)
     {
         JoinNode join = captures.get(JOIN);
-        return applyPushdown(aggregation, join, join);
+        return applyPushdown(aggregation, join, join, context);
     }
 
     private Result applyPushdown(
             AggregationNode aggregation,
             JoinNode join,
-            JoinNode uniquenessSource)
+            JoinNode uniquenessSource,
+            Context context)
     {
         if (!isSupportedJoin(join)) {
             return Result.empty();
         }
 
-        Optional<PlanNode> pushedToLeft = tryPushToSide(aggregation, join, uniquenessSource, true);
+        Optional<PlanNode> pushedToLeft = tryPushToSide(aggregation, join, uniquenessSource, true, context);
         if (pushedToLeft.isPresent()) {
             return Result.ofPlanNode(pushedToLeft.get());
         }
 
-        return tryPushToSide(aggregation, join, uniquenessSource, false)
+        return tryPushToSide(aggregation, join, uniquenessSource, false, context)
                 .map(Result::ofPlanNode)
                 .orElseGet(Result::empty);
     }
@@ -153,7 +207,8 @@ public class PushAggregationThroughUniqueLookupJoin
             AggregationNode aggregation,
             JoinNode join,
             JoinNode uniquenessSource,
-            boolean aggregationOnLeft)
+            boolean aggregationOnLeft,
+            Context context)
     {
         PlanNode aggregationSource = aggregationOnLeft ? join.getLeft() : join.getRight();
         Set<VariableReferenceExpression> aggregationSourceOutputs = ImmutableSet.copyOf(aggregationSource.getOutputVariables());
@@ -186,6 +241,10 @@ public class PushAggregationThroughUniqueLookupJoin
                 aggregation.getGroupIdVariable(),
                 aggregation.getAggregationId());
 
+        if (!isPushdownBeneficial(aggregationSource, join, pushedAggregation, aggregationOnLeft, context)) {
+            return Optional.empty();
+        }
+
         PlanNode left = aggregationOnLeft ? pushedAggregation : join.getLeft();
         PlanNode right = aggregationOnLeft ? join.getRight() : pushedAggregation;
 
@@ -211,6 +270,129 @@ public class PushAggregationThroughUniqueLookupJoin
                 join.isRightKeysCoveredByLeftKeys()));
     }
 
+    private boolean isPushdownBeneficial(
+            PlanNode aggregationSource,
+            JoinNode join,
+            AggregationNode pushedAggregation,
+            boolean aggregationOnLeft,
+            Context context)
+    {
+        if (getPartialAggregationStrategy(context.getSession()) == NEVER ||
+                !isDecomposable(pushedAggregation, functionAndTypeManager) ||
+                pushedAggregation.getGroupingKeys().stream().anyMatch(variable -> !(variable.getType() instanceof FixedWidthType))) {
+            return false;
+        }
+
+        List<Type> intermediateTypes = pushedAggregation.getAggregations().values().stream()
+                .map(AggregationNode.Aggregation::getFunctionHandle)
+                .map(functionAndTypeManager::getAggregateFunctionImplementation)
+                .map(function -> function.getIntermediateType())
+                .collect(ImmutableList.toImmutableList());
+        if (intermediateTypes.stream().anyMatch(type -> !(type instanceof FixedWidthType))) {
+            return false;
+        }
+
+        PlanNodeStatsEstimate sourceStats = context.getStatsProvider().getStats(aggregationSource);
+        if (aggregationSource.getOutputVariables().stream()
+                .filter(variable -> !(variable.getType() instanceof FixedWidthType))
+                .map(sourceStats::getVariableStatistics)
+                .mapToDouble(variableStats -> variableStats.getAverageRowSize())
+                .anyMatch(size -> !Double.isFinite(size) || size < 0)) {
+            return false;
+        }
+
+        PlanNodeStatsEstimate pushedAggregationStats = groupBy(
+                sourceStats,
+                pushedAggregation.getGroupingKeys(),
+                pushedAggregation.getAggregations());
+
+        double sourceRows = sourceStats.getOutputRowCount();
+        double aggregationRows = pushedAggregationStats.getOutputRowCount();
+        double joinRows = context.getStatsProvider().getStats(join).getOutputRowCount();
+        double sourceBytes = sourceStats.getOutputSizeForVariables(aggregationSource.getOutputVariables());
+        double aggregationStateSizePerGroup = aggregationStateSizeInBytes(pushedAggregation.getGroupingKeys(), intermediateTypes);
+        double aggregationStateBytes = aggregationRows * aggregationStateSizePerGroup;
+        if (!isFinitePositive(sourceRows) ||
+                !isFinitePositive(aggregationRows) ||
+                !isFinitePositive(joinRows) ||
+                !isFinitePositive(sourceBytes) ||
+                !isFinitePositive(aggregationStateBytes)) {
+            return false;
+        }
+
+        double stateReductionRatio = MAX_AGGREGATION_STATE_TO_SOURCE_BYTES_RATIO;
+        if (getPartialAggregationStrategy(context.getSession()) == AUTOMATIC) {
+            stateReductionRatio = Math.min(stateReductionRatio, getPartialAggregationByteReductionThreshold(context.getSession()));
+        }
+        if (!isFinitePositive(stateReductionRatio) ||
+                aggregationRows > sourceRows * MAX_GROUPS_TO_SOURCE_ROWS_RATIO ||
+                aggregationStateBytes > sourceBytes * stateReductionRatio) {
+            return false;
+        }
+
+        double maxGroupsToJoinRowsRatio = isLookupLikelyReplicated(join, aggregationOnLeft, context) ?
+                MAX_GROUPS_TO_REPLICATED_JOIN_ROWS_RATIO :
+                MAX_GROUPS_TO_PARTITIONED_JOIN_ROWS_RATIO;
+        if (aggregationRows > joinRows * maxGroupsToJoinRowsRatio) {
+            return false;
+        }
+
+        int hashedTaskCount = isSingleNodeExecutionEnabled(context.getSession()) ?
+                1 :
+                Math.max(1, taskCountEstimator.estimateHashedTaskCount(context.getSession()));
+        double estimatedAggregationMemoryBytes = aggregationRows * Math.max(
+                aggregationStateSizePerGroup * AGGREGATION_STATE_MEMORY_OVERHEAD,
+                MIN_HASH_AGGREGATION_MEMORY_BYTES_PER_GROUP);
+        double estimatedStateBytesPerTask = estimatedAggregationMemoryBytes / hashedTaskCount;
+        double maxStateBytesPerTask = getQueryMaxMemoryPerNode(context.getSession()).toBytes() * MAX_AGGREGATION_MEMORY_FRACTION;
+        return estimatedStateBytesPerTask <= maxStateBytesPerTask;
+    }
+
+    private static double aggregationStateSizeInBytes(
+            List<VariableReferenceExpression> groupingKeys,
+            List<Type> intermediateTypes)
+    {
+        return groupingKeys.stream()
+                .map(VariableReferenceExpression::getType)
+                .map(FixedWidthType.class::cast)
+                .mapToDouble(type -> type.getFixedSize() + Byte.BYTES)
+                .sum() +
+                intermediateTypes.stream()
+                        .map(FixedWidthType.class::cast)
+                        .mapToDouble(type -> type.getFixedSize() + Byte.BYTES)
+                        .sum();
+    }
+
+    private static boolean isLookupLikelyReplicated(JoinNode join, boolean aggregationOnLeft, Context context)
+    {
+        if (join.getDistributionType().isPresent()) {
+            // In a replicated join the right side is the replicated build. A
+            // fact-side aggregation on the right reduces that build rather than
+            // moving work ahead of a replicated lookup.
+            return join.getDistributionType().get() == REPLICATED && aggregationOnLeft;
+        }
+        if (getJoinDistributionType(context.getSession()) == BROADCAST) {
+            // BROADCAST preserves syntactic order. The lookup is the build side
+            // only when the fact input being aggregated is on the left.
+            return aggregationOnLeft;
+        }
+        if (getJoinDistributionType(context.getSession()) == PARTITIONED) {
+            return false;
+        }
+
+        // DetermineJoinDistributionType runs after this rule. Treat every
+        // broadcast-eligible lookup as replicated so the profitability gate is
+        // conservative even if the cost model ultimately chooses partitioning.
+        JoinNode lookupOnBuild = aggregationOnLeft ? join : join.flipChildren();
+        return isAtMostScalar(lookupOnBuild.getRight(), context.getLookup()) ||
+                isBelowMaxBroadcastSize(lookupOnBuild, context);
+    }
+
+    private static boolean isFinitePositive(double value)
+    {
+        return Double.isFinite(value) && value > 0;
+    }
+
     private static boolean isSupportedAggregation(AggregationNode aggregation)
     {
         return aggregation.getStep() == SINGLE
@@ -228,8 +410,7 @@ public class PushAggregationThroughUniqueLookupJoin
                 && !join.getCriteria().isEmpty()
                 && !join.getFilter().isPresent()
                 && !join.getLeftHashVariable().isPresent()
-                && !join.getRightHashVariable().isPresent()
-                && join.getDynamicFilters().isEmpty();
+                && !join.getRightHashVariable().isPresent();
     }
 
     private static boolean allAggregationsOn(
@@ -271,6 +452,12 @@ public class PushAggregationThroughUniqueLookupJoin
         }
 
         @Override
+        public boolean isCostBased(Session session)
+        {
+            return PushAggregationThroughUniqueLookupJoin.this.isCostBased(session);
+        }
+
+        @Override
         public Result apply(AggregationNode aggregation, Captures captures, Context context)
         {
             ProjectNode project = (ProjectNode) context.getLookup().resolve(aggregation.getSource());
@@ -285,7 +472,7 @@ public class PushAggregationThroughUniqueLookupJoin
             }
 
             AggregationNode rewrittenAggregation = (AggregationNode) aggregation.replaceChildren(ImmutableList.of(projectedJoin.get()));
-            return applyPushdown(rewrittenAggregation, projectedJoin.get(), uniquenessSource);
+            return applyPushdown(rewrittenAggregation, projectedJoin.get(), uniquenessSource, context);
         }
     }
 }

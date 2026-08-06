@@ -1105,15 +1105,17 @@ public class PlanOptimizers
                 Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
                 ImmutableSet.of(new TransformRepeatedScalarSumToGroupedScalarFilter(metadata.getFunctionAndTypeManager()))));
 
-        // Run after the post-Reorder transformations have exposed complete fact-key
-        // aggregations, but before join distribution and exchange planning.
+        // Run after the post-Reorder transformations expose complete fact-key
+        // aggregations, but before exchange planning. Preserve distributions
+        // already chosen by ReorderJoins; otherwise the later distribution pass
+        // costs the join using its reduced input.
         builder.add(new IterativeOptimizer(
                 metadata,
                 ruleStats,
                 statsCalculator,
                 estimatedExchangesCostCalculator,
                 Optional.of(new LogicalPropertiesProviderImpl(new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver()))),
-                ImmutableSet.copyOf(new PushAggregationThroughUniqueLookupJoin(metadata.getFunctionAndTypeManager()).rules())));
+                ImmutableSet.copyOf(new PushAggregationThroughUniqueLookupJoin(metadata.getFunctionAndTypeManager(), taskCountEstimator).rules())));
 
         builder.add(new IterativeOptimizer(
                 metadata,
