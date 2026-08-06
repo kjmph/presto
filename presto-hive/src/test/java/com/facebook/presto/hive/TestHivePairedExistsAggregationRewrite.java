@@ -29,6 +29,7 @@ import org.testng.annotations.Test;
 
 import java.util.Optional;
 
+import static com.facebook.presto.SystemSessionProperties.DISTRIBUTED_DYNAMIC_FILTER_STRATEGY;
 import static com.facebook.presto.SystemSessionProperties.JOINS_NOT_NULL_INFERENCE_STRATEGY;
 import static com.facebook.presto.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
 import static com.facebook.presto.SystemSessionProperties.PARTIAL_AGGREGATION_STRATEGY;
@@ -181,8 +182,30 @@ public class TestHivePairedExistsAggregationRewrite
                     "(5, 30, DATE '1995-01-02', DATE '1995-01-01'), " +
                     "(5, 20, DATE '1995-01-01', DATE '1995-01-02'), " +
                     "(6, 20, DATE '1995-01-02', DATE '1995-01-01'), " +
-                    "(6, 10, DATE '1995-01-01', DATE '1995-01-02')",
-                    12);
+                    "(6, 10, DATE '1995-01-01', DATE '1995-01-02'), " +
+                    // Preserve the expected Q21 result while giving the cost
+                    // model the fact-to-group reduction seen at benchmark scale.
+                    "(4, 10, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(4, 20, DATE '1995-01-01', DATE '1995-01-02'), " +
+                    "(4, 10, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(4, 20, DATE '1995-01-01', DATE '1995-01-02'), " +
+                    "(4, 10, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(4, 20, DATE '1995-01-01', DATE '1995-01-02'), " +
+                    "(4, 10, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(4, 20, DATE '1995-01-01', DATE '1995-01-02'), " +
+                    "(4, 10, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(4, 20, DATE '1995-01-01', DATE '1995-01-02'), " +
+                    "(4, 10, DATE '1995-01-02', DATE '1995-01-01'), " +
+                    "(4, 20, DATE '1995-01-01', DATE '1995-01-02')",
+                    24);
+
+            // The default unique-lookup pushdown is cost based and fails closed
+            // without grouping-key and join-key statistics.
+            Session statisticsSession = session(true, false);
+            assertUpdate(statisticsSession, "ANALYZE " + Q21_NATION_TABLE_NAME, 2);
+            assertUpdate(statisticsSession, "ANALYZE " + Q21_SUPPLIER_TABLE_NAME, 3);
+            assertUpdate(statisticsSession, "ANALYZE " + Q21_ORDERS_TABLE_NAME, 6);
+            assertUpdate(statisticsSession, "ANALYZE " + Q21_LINEITEM_TABLE_NAME, 24);
 
             // Keep execution independent of the Java Parquet reader's support
             // for complex pushed filters, while planning with both pushdowns
@@ -212,18 +235,22 @@ public class TestHivePairedExistsAggregationRewrite
             assertTrue(hasPartialAggregationBelowOrdersJoinAndExchange(partialPushdownEnabled));
             assertFalse(hasPartialAggregationBelowOrdersJoinAndExchange(partialPushdownReplicated));
 
-            Session uniqueLookupPushdownDisabledExecution = q21UniqueLookupAggregationSession(false, false);
-            Session uniqueLookupPushdownEnabledExecution = q21UniqueLookupAggregationSession(true, false);
-            assertQueryWithSameQueryRunner(uniqueLookupPushdownEnabledExecution, Q21_QUERY, uniqueLookupPushdownDisabledExecution);
+            Session uniqueLookupPushdownDefaultExecution = q21UniqueLookupAggregationSession(false);
+            Session uniqueLookupPushdownDisabledExecution = q21UniqueLookupAggregationDisabledSession(false);
+            assertQueryWithSameQueryRunner(uniqueLookupPushdownDefaultExecution, Q21_QUERY, uniqueLookupPushdownDisabledExecution);
 
-            Plan uniqueLookupPushdownDisabled = plan(Q21_QUERY, q21UniqueLookupAggregationSession(false, true));
-            Plan uniqueLookupPushdownEnabled = plan(Q21_QUERY, q21UniqueLookupAggregationSession(true, true));
+            Plan uniqueLookupPushdownDisabled = plan(Q21_QUERY, q21UniqueLookupAggregationDisabledSession(true));
+            Plan uniqueLookupPushdownDefault = plan(Q21_QUERY, q21UniqueLookupAggregationSession(true));
+            Plan uniqueLookupPushdownWithDynamicFilters = plan(Q21_QUERY, q21UniqueLookupAggregationWithDynamicFiltersSession(true));
+            Plan uniqueLookupPushdownWithPartialAggregation = plan(Q21_QUERY, q21UniqueLookupAggregationWithPartialSession(true));
             assertEquals(countTableScans(uniqueLookupPushdownDisabled, Q21_LINEITEM_TABLE_NAME), 1);
-            assertEquals(countTableScans(uniqueLookupPushdownEnabled, Q21_LINEITEM_TABLE_NAME), 1);
+            assertEquals(countTableScans(uniqueLookupPushdownDefault, Q21_LINEITEM_TABLE_NAME), 1);
             assertOrdersJoinAndFilterRetained(uniqueLookupPushdownDisabled);
-            assertOrdersJoinAndFilterRetained(uniqueLookupPushdownEnabled);
+            assertOrdersJoinAndFilterRetained(uniqueLookupPushdownDefault);
             assertFalse(hasCompleteAggregationBelowOrdersJoin(uniqueLookupPushdownDisabled));
-            assertTrue(hasCompleteAggregationBelowOrdersJoin(uniqueLookupPushdownEnabled));
+            assertTrue(hasCompleteAggregationBelowOrdersJoin(uniqueLookupPushdownDefault));
+            assertTrue(hasCompleteAggregationBelowOrdersJoin(uniqueLookupPushdownWithDynamicFilters));
+            assertTrue(hasPartialAggregationBelowOrdersJoinAndExchange(uniqueLookupPushdownWithPartialAggregation));
         }
         finally {
             assertUpdate("DROP TABLE IF EXISTS " + Q21_LINEITEM_TABLE_NAME);
@@ -255,6 +282,7 @@ public class TestHivePairedExistsAggregationRewrite
                 .setSystemProperty(JOIN_DISTRIBUTION_TYPE, "PARTITIONED")
                 .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "ALWAYS")
                 .setSystemProperty(PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN, String.valueOf(pushPartialAggregationThroughJoin))
+                .setSystemProperty(PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN, "false")
                 .build();
     }
 
@@ -264,16 +292,37 @@ public class TestHivePairedExistsAggregationRewrite
                 .setSystemProperty(JOIN_DISTRIBUTION_TYPE, "BROADCAST")
                 .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "ALWAYS")
                 .setSystemProperty(PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN, String.valueOf(pushPartialAggregationThroughJoin))
+                .setSystemProperty(PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN, "false")
                 .build();
     }
 
-    private Session q21UniqueLookupAggregationSession(boolean pushAggregationThroughUniqueLookupJoin, boolean pushdownFilter)
+    private Session q21UniqueLookupAggregationSession(boolean pushdownFilter)
     {
         return Session.builder(q21Session(true, pushdownFilter))
                 .setSystemProperty(JOIN_DISTRIBUTION_TYPE, "PARTITIONED")
-                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "NEVER")
+                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "AUTOMATIC")
                 .setSystemProperty(PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN, "false")
-                .setSystemProperty(PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN, String.valueOf(pushAggregationThroughUniqueLookupJoin))
+                .build();
+    }
+
+    private Session q21UniqueLookupAggregationDisabledSession(boolean pushdownFilter)
+    {
+        return Session.builder(q21UniqueLookupAggregationSession(pushdownFilter))
+                .setSystemProperty(PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN, "false")
+                .build();
+    }
+
+    private Session q21UniqueLookupAggregationWithDynamicFiltersSession(boolean pushdownFilter)
+    {
+        return Session.builder(q21UniqueLookupAggregationSession(pushdownFilter))
+                .setSystemProperty(DISTRIBUTED_DYNAMIC_FILTER_STRATEGY, "ALWAYS")
+                .build();
+    }
+
+    private Session q21UniqueLookupAggregationWithPartialSession(boolean pushdownFilter)
+    {
+        return Session.builder(q21UniqueLookupAggregationSession(pushdownFilter))
+                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "ALWAYS")
                 .build();
     }
 
