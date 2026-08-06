@@ -22,6 +22,7 @@ import com.facebook.presto.spi.constraints.ForeignKeyConstraint;
 import com.facebook.presto.spi.constraints.TableConstraint;
 import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.JoinNode;
+import com.facebook.presto.spi.plan.ProjectNode;
 import com.facebook.presto.spi.plan.SemiJoinNode;
 import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.relation.CallExpression;
@@ -48,6 +49,7 @@ import java.util.LinkedHashSet;
 import java.util.Optional;
 
 import static com.facebook.airlift.testing.Closeables.closeAllRuntimeException;
+import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.common.type.IntegerType.INTEGER;
@@ -58,6 +60,8 @@ import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.equiJo
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.join;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.joinWithKeyProperties;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.tableScan;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identityAssignments;
+import static com.facebook.presto.sql.relational.Expressions.comparisonExpression;
 import static java.util.Collections.emptyList;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
@@ -584,6 +588,84 @@ public class TestAnnotateJoinNodeWithUniqueKeys
         assertTrue(semiJoin.isFilteringSourceKeyUnique());
         assertFalse(semiJoin.isSourceKeyNonNull());
         assertTrue(semiJoin.isFilteringSourceKeyNonNull());
+    }
+
+    @Test
+    public void testAnnotatesNonNullKeysThroughNestedFilteredSemiJoin()
+    {
+        ConnectorId connectorId = tester.getCurrentConnectorId();
+        TpchTableHandle lineitemTpchTableHandle = new TpchTableHandle("lineitem", 1.0);
+        TableHandle lineitemTableHandle = tableHandle(connectorId, lineitemTpchTableHandle);
+        ColumnHandle orderkeyColumn = new TpchColumnHandle("orderkey", BIGINT);
+        ColumnHandle suppkeyColumn = new TpchColumnHandle("suppkey", BIGINT);
+        FunctionResolution functionResolution = new FunctionResolution(tester.getMetadata().getFunctionAndTypeManager().getFunctionAndTypeResolver());
+
+        tester.assertThat(ImmutableSet.of(new AnnotateSemiJoinNodeWithUniqueKeys()), logicalPropertiesProvider)
+                .on(p -> {
+                    VariableReferenceExpression l1Orderkey = p.variable("l1_orderkey", BIGINT);
+                    VariableReferenceExpression l1Suppkey = p.variable("l1_suppkey", BIGINT);
+                    VariableReferenceExpression l2Orderkey = p.variable("l2_orderkey", BIGINT);
+                    VariableReferenceExpression l2Suppkey = p.variable("l2_suppkey", BIGINT);
+                    VariableReferenceExpression l3Orderkey = p.variable("l3_orderkey", BIGINT);
+                    VariableReferenceExpression l3Suppkey = p.variable("l3_suppkey", BIGINT);
+                    VariableReferenceExpression innerMatch = p.variable("inner_match", BOOLEAN);
+                    VariableReferenceExpression outerMatch = p.variable("outer_match", BOOLEAN);
+
+                    TableScanNode l1 = p.tableScan(
+                            lineitemTableHandle,
+                            ImmutableList.of(l1Orderkey, l1Suppkey),
+                            ImmutableMap.of(l1Orderkey, orderkeyColumn, l1Suppkey, suppkeyColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            tester.getTableConstraints(lineitemTableHandle));
+                    TableScanNode l2 = p.tableScan(
+                            lineitemTableHandle,
+                            ImmutableList.of(l2Orderkey, l2Suppkey),
+                            ImmutableMap.of(l2Orderkey, orderkeyColumn, l2Suppkey, suppkeyColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            tester.getTableConstraints(lineitemTableHandle));
+                    TableScanNode l3 = p.tableScan(
+                            lineitemTableHandle,
+                            ImmutableList.of(l3Orderkey, l3Suppkey),
+                            ImmutableMap.of(l3Orderkey, orderkeyColumn, l3Suppkey, suppkeyColumn),
+                            TupleDomain.all(),
+                            TupleDomain.all(),
+                            tester.getTableConstraints(lineitemTableHandle));
+
+                    SemiJoinNode inner = p.semiJoin(
+                            l1,
+                            l2,
+                            l1Orderkey,
+                            l2Orderkey,
+                            innerMatch,
+                            Optional.empty(),
+                            Optional.empty(),
+                            Optional.empty(),
+                            Optional.of(comparisonExpression(functionResolution, NOT_EQUAL, l1Suppkey, l2Suppkey)));
+                    ProjectNode projectedInner = p.project(inner, identityAssignments(inner.getOutputVariables()));
+
+                    return p.semiJoin(
+                            projectedInner,
+                            l3,
+                            l1Orderkey,
+                            l3Orderkey,
+                            outerMatch,
+                            Optional.empty(),
+                            Optional.empty(),
+                            Optional.empty(),
+                            Optional.of(comparisonExpression(functionResolution, NOT_EQUAL, l1Suppkey, l3Suppkey)));
+                })
+                .validates(plan -> {
+                    SemiJoinNode outer = (SemiJoinNode) plan.getRoot();
+                    ProjectNode projectedInner = (ProjectNode) outer.getSource();
+                    SemiJoinNode inner = (SemiJoinNode) projectedInner.getSource();
+
+                    assertTrue(inner.isSourceKeyNonNull());
+                    assertTrue(inner.isFilteringSourceKeyNonNull());
+                    assertTrue(outer.isSourceKeyNonNull());
+                    assertTrue(outer.isFilteringSourceKeyNonNull());
+                });
     }
 
     @Test
