@@ -30,6 +30,7 @@ import com.facebook.presto.spi.plan.JoinNode;
 import com.facebook.presto.spi.plan.JoinType;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.ProjectNode;
+import com.facebook.presto.spi.plan.SemiJoinNode;
 import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.RowExpression;
@@ -174,6 +175,14 @@ public class AnnotateJoinNodeWithUniqueKeys
             RowExpression assignment = project.getAssignments().get(variable);
             return assignment instanceof VariableReferenceExpression &&
                     isKnownNonNull(project.getSource(), (VariableReferenceExpression) assignment, context);
+        }
+
+        if (resolved instanceof SemiJoinNode) {
+            SemiJoinNode semiJoin = (SemiJoinNode) resolved;
+            if (!semiJoin.getSource().getOutputVariables().contains(variable)) {
+                return false;
+            }
+            return isKnownNonNull(semiJoin.getSource(), variable, context);
         }
 
         if (resolved instanceof ExchangeNode) {
