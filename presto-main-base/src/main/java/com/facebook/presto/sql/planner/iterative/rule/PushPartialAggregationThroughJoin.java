@@ -26,10 +26,11 @@ import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.JoinNode;
 import com.facebook.presto.spi.plan.JoinType;
 import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.relation.DeterminismEvaluator;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.VariablesExtractor;
 import com.facebook.presto.sql.planner.iterative.Rule;
+import com.facebook.presto.sql.relational.RowExpressionDeterminismEvaluator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
@@ -61,10 +62,12 @@ public class PushPartialAggregationThroughJoin
     private static final Capture<JoinNode> JOIN_NODE = Capture.newCapture();
 
     private final FunctionAndTypeManager functionAndTypeManager;
+    private final DeterminismEvaluator determinismEvaluator;
 
     public PushPartialAggregationThroughJoin(FunctionAndTypeManager functionAndTypeManager)
     {
         this.functionAndTypeManager = requireNonNull(functionAndTypeManager, "functionAndTypeManager is null");
+        this.determinismEvaluator = new RowExpressionDeterminismEvaluator(functionAndTypeManager);
     }
 
     private static final Pattern<AggregationNode> PATTERN = aggregation()
@@ -80,6 +83,11 @@ public class PushPartialAggregationThroughJoin
 
         if (aggregationNode.getHashVariable().isPresent()) {
             // TODO: add support for hash symbol in aggregation node
+            return false;
+        }
+        if (aggregationNode.getGroupIdVariable().isPresent()) {
+            // Moving the aggregation to one join input can remove a group-id symbol produced by
+            // the other input. Group-id aggregations require dedicated rewrite support.
             return false;
         }
         return aggregationNode.getStep() == PARTIAL && aggregationNode.getGroupingSetCount() == 1;
@@ -109,8 +117,16 @@ public class PushPartialAggregationThroughJoin
         if (joinType != JoinType.INNER && !isPushPartialAggregationThroughOuterJoin(context.getSession())) {
             return Result.empty();
         }
-
-        TypeProvider types = TypeProvider.viewOf(context.getVariableAllocator().getVariables());
+        if (joinNode.getFilter().filter(filter -> !determinismEvaluator.isDeterministic(filter)).isPresent()) {
+            // The rewrite can evaluate a residual filter once per partial group instead of once
+            // per input-row pair. That is equivalent only for deterministic filters.
+            return Result.empty();
+        }
+        if (!allAggregationsDeterministic(aggregationNode.getAggregations().values())) {
+            // Pushing below a join can evaluate aggregate arguments and filters fewer times, then
+            // replicate their partial state across join matches.
+            return Result.empty();
+        }
 
         // A join input whose rows the join preserves exactly (both inputs of an INNER join, the
         // left input of a LEFT join, the right input of a RIGHT join) can accept any partial
@@ -122,11 +138,11 @@ public class PushPartialAggregationThroughJoin
         boolean leftIsNullExtended = joinType == JoinType.RIGHT || joinType == JoinType.FULL;
         boolean rightIsNullExtended = joinType == JoinType.LEFT || joinType == JoinType.FULL;
 
-        if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getLeft().getOutputVariables(), types)
+        if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getLeft().getOutputVariables())
                 && (!leftIsNullExtended || allAggregationsIgnoreNullInputs(aggregationNode.getAggregations().values()))) {
             return Result.ofPlanNode(pushPartialToLeftChild(aggregationNode, joinNode, context));
         }
-        if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getRight().getOutputVariables(), types)
+        if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getRight().getOutputVariables())
                 && (!rightIsNullExtended || allAggregationsIgnoreNullInputs(aggregationNode.getAggregations().values()))) {
             return Result.ofPlanNode(pushPartialToRightChild(aggregationNode, joinNode, context));
         }
@@ -150,6 +166,13 @@ public class PushPartialAggregationThroughJoin
                         && ignoresNullInputs(aggregation.getFunctionHandle()));
     }
 
+    private boolean allAggregationsDeterministic(Collection<AggregationNode.Aggregation> aggregations)
+    {
+        return aggregations.stream().allMatch(aggregation ->
+                determinismEvaluator.isDeterministic(aggregation.getCall()) &&
+                        aggregation.getFilter().map(determinismEvaluator::isDeterministic).orElse(true));
+    }
+
     /**
      * FunctionMetadata#isCalledOnNullInput cannot be used here: for many built-in aggregations,
      * SqlAggregationFunction inherits BuiltInFunction#isCalledOnNullInput (always false), regardless
@@ -169,14 +192,14 @@ public class PushPartialAggregationThroughJoin
                 .noneMatch(parameterMetadata -> parameterMetadata.getParameterType() == NULLABLE_BLOCK_INPUT_CHANNEL);
     }
 
-    private boolean allAggregationsOn(Map<VariableReferenceExpression, AggregationNode.Aggregation> aggregations, List<VariableReferenceExpression> variables, TypeProvider types)
+    private boolean allAggregationsOn(Map<VariableReferenceExpression, AggregationNode.Aggregation> aggregations, List<VariableReferenceExpression> variables)
     {
-        Set<VariableReferenceExpression> inputs = aggregations.values()
-                .stream()
-                .map(aggregation -> extractAggregationUniqueVariables(aggregation))
-                .flatMap(Set::stream)
-                .collect(toImmutableSet());
-        return variables.containsAll(inputs);
+        ImmutableSet.Builder<VariableReferenceExpression> inputs = ImmutableSet.builder();
+        for (AggregationNode.Aggregation aggregation : aggregations.values()) {
+            inputs.addAll(extractAggregationUniqueVariables(aggregation));
+            aggregation.getMask().ifPresent(inputs::add);
+        }
+        return variables.containsAll(inputs.build());
     }
 
     private PlanNode pushPartialToLeftChild(AggregationNode node, JoinNode child, Context context)
@@ -202,7 +225,8 @@ public class PushPartialAggregationThroughJoin
                         node.getCriteria().stream().map(EquiJoinClause::getRight),
                         node.getFilter().map(expression -> VariablesExtractor.extractUnique(expression)).orElse(ImmutableSet.of()).stream(),
                         node.getLeftHashVariable().map(ImmutableSet::of).orElse(ImmutableSet.of()).stream(),
-                        node.getRightHashVariable().map(ImmutableSet::of).orElse(ImmutableSet.of()).stream())
+                        node.getRightHashVariable().map(ImmutableSet::of).orElse(ImmutableSet.of()).stream(),
+                        node.getDynamicFilters().values().stream())
                 .collect(toImmutableSet());
     }
 
