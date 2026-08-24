@@ -2086,7 +2086,7 @@ public final class SystemSessionProperties
                         false),
                 booleanProperty(
                         USE_DEFAULTS_FOR_CORRELATED_AGGREGATION_PUSHDOWN_THROUGH_OUTER_JOINS,
-                        "Coalesce with defaults for correlated aggregations",
+                        "Use literal defaults when restoring unmatched outer-join aggregations",
                         featuresConfig.isUseDefaultsForCorrelatedAggregationPushdownThroughOuterJoins(),
                         false),
                 booleanProperty(

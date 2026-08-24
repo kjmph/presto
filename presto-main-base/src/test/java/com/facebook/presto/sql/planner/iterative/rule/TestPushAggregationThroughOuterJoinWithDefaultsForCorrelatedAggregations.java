@@ -14,6 +14,7 @@
 
 package com.facebook.presto.sql.planner.iterative.rule;
 
+import com.facebook.presto.common.type.ArrayType;
 import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.JoinType;
 import com.facebook.presto.spi.plan.Ordering;
@@ -33,6 +34,7 @@ import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.aggreg
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.equiJoinClause;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.expression;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.functionCall;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.globalAggregation;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.join;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.project;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.singleGroupingSet;
@@ -64,17 +66,25 @@ public class TestPushAggregationThroughOuterJoinWithDefaultsForCorrelatedAggrega
                         .singleGroupingSet(p.variable("COL1"))))
                 .matches(
                         project(ImmutableMap.of(
-                                        "COL1", expression("COL1"),
-                                        "COALESCE", expression("coalesce(AVG, NULL)")),
-                                join(JoinType.LEFT, ImmutableList.of(equiJoinClause("COL1", "COL2")),
-                                        values(ImmutableMap.of("COL1", 0)),
+                                "COL1", expression("COL1"),
+                                "AVG", expression("IF(COL2 IS NULL, AVG_DEFAULT, AVG)")),
+                                join(JoinType.INNER, ImmutableList.of(),
+                                        join(JoinType.LEFT, ImmutableList.of(equiJoinClause("COL1", "COL2")),
+                                                values(ImmutableMap.of("COL1", 0)),
+                                                aggregation(
+                                                        singleGroupingSet("COL2"),
+                                                        ImmutableMap.of(Optional.of("AVG"), functionCall("avg", ImmutableList.of("COL2"))),
+                                                        ImmutableMap.of(),
+                                                        Optional.empty(),
+                                                        SINGLE,
+                                                        values(ImmutableMap.of("COL2", 0)))),
                                         aggregation(
-                                                singleGroupingSet("COL2"),
-                                                ImmutableMap.of(Optional.of("AVG"), functionCall("avg", ImmutableList.of("COL2"))),
+                                                globalAggregation(),
+                                                ImmutableMap.of(Optional.of("AVG_DEFAULT"), functionCall("avg", ImmutableList.of("null_literal"))),
                                                 ImmutableMap.of(),
                                                 Optional.empty(),
                                                 SINGLE,
-                                                values(ImmutableMap.of("COL2", 0))))));
+                                                values(ImmutableMap.of("null_literal", 1))))));
     }
 
     @Test
@@ -90,7 +100,7 @@ public class TestPushAggregationThroughOuterJoinWithDefaultsForCorrelatedAggrega
                                                 ImmutableList.of(constantExpressions(BIGINT, 10L, 20L))),
                                         p.values(p.variable("COL2"), p.variable("COL4")),
                                         ImmutableList.of(new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))),
-                                        ImmutableList.of(p.variable("COL1"), p.variable("COL2")),
+                                        ImmutableList.of(p.variable("COL1"), p.variable("COL3"), p.variable("COL2"), p.variable("COL4")),
                                         Optional.empty(),
                                         Optional.empty(),
                                         Optional.empty()))
@@ -104,22 +114,34 @@ public class TestPushAggregationThroughOuterJoinWithDefaultsForCorrelatedAggrega
                         .singleGroupingSet(p.variable("COL1"), p.variable("COL3"))))
                 .matches(
                         project(ImmutableMap.of(
-                                        "COL1", expression("COL1"),
-                                        "COL3", expression("COL3"),
-                                        "COALESCE", expression("coalesce(AVG, NULL)")),
-                                join(JoinType.LEFT, ImmutableList.of(equiJoinClause("COL1", "COL2")),
-                                        values(ImmutableMap.of("COL1", 0, "COL3", 0)),
+                                "COL1", expression("COL1"),
+                                "COL3", expression("COL3"),
+                                "AVG", expression("IF(COL2 IS NULL, AVG_DEFAULT, AVG)")),
+                                join(JoinType.INNER, ImmutableList.of(),
+                                        join(JoinType.LEFT, ImmutableList.of(equiJoinClause("COL1", "COL2")),
+                                                values(ImmutableMap.of("COL1", 0, "COL3", 0)),
+                                                aggregation(
+                                                        singleGroupingSet("COL2"),
+                                                        ImmutableMap.of(Optional.of("AVG"),
+                                                                functionCall(
+                                                                        "avg",
+                                                                        ImmutableList.of("COL2"),
+                                                                        ImmutableList.of(sort("COL4", ASCENDING, LAST)))),
+                                                        ImmutableMap.of(),
+                                                        Optional.empty(),
+                                                        SINGLE,
+                                                        values(ImmutableList.of("COL2", "COL4")))),
                                         aggregation(
-                                                singleGroupingSet("COL2"),
-                                                ImmutableMap.of(Optional.of("AVG"),
+                                                globalAggregation(),
+                                                ImmutableMap.of(Optional.of("AVG_DEFAULT"),
                                                         functionCall(
                                                                 "avg",
-                                                                ImmutableList.of("COL2"),
-                                                                ImmutableList.of(sort("COL4", ASCENDING, LAST)))),
+                                                                ImmutableList.of("null_literal"),
+                                                                ImmutableList.of(sort("null_literal2", ASCENDING, LAST)))),
                                                 ImmutableMap.of(),
                                                 Optional.empty(),
                                                 SINGLE,
-                                                values(ImmutableList.of("COL2", "COL4"))))));
+                                                values(ImmutableMap.of("null_literal", 2, "null_literal2", 3))))));
     }
 
     @Test
@@ -138,10 +160,11 @@ public class TestPushAggregationThroughOuterJoinWithDefaultsForCorrelatedAggrega
                                 Optional.empty()))
                         .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("avg(COL2)"))
                         .singleGroupingSet(p.variable("COL1"))))
-                .matches(
-                        project(ImmutableMap.of(
-                                        "COALESCE", expression("coalesce(AVG, NULL)"),
-                                        "COL1", expression("COL1")),
+                .matches(project(
+                        ImmutableMap.of(
+                                "AVG", expression("IF(COL2 IS NULL, AVG_DEFAULT, AVG)"),
+                                "COL1", expression("COL1")),
+                        join(JoinType.INNER, ImmutableList.of(),
                                 join(JoinType.RIGHT, ImmutableList.of(equiJoinClause("COL2", "COL1")),
                                         aggregation(
                                                 singleGroupingSet("COL2"),
@@ -150,6 +173,83 @@ public class TestPushAggregationThroughOuterJoinWithDefaultsForCorrelatedAggrega
                                                 Optional.empty(),
                                                 SINGLE,
                                                 values(ImmutableMap.of("COL2", 0))),
-                                        values(ImmutableMap.of("COL1", 0)))));
+                                        values(ImmutableMap.of("COL1", 0))),
+                                aggregation(
+                                        globalAggregation(),
+                                        ImmutableMap.of(Optional.of("AVG_DEFAULT"), functionCall("avg", ImmutableList.of("null_literal"))),
+                                        ImmutableMap.of(),
+                                        Optional.empty(),
+                                        SINGLE,
+                                        values(ImmutableMap.of("null_literal", 0))))));
+    }
+
+    @Test
+    public void testUsesLiteralZeroForSimpleCount()
+    {
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(ImmutableList.of(p.variable("COL1")), ImmutableList.of(constantExpressions(BIGINT, 10L))),
+                                p.values(p.variable("COL2")),
+                                ImmutableList.of(new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))),
+                                ImmutableList.of(p.variable("COL1"), p.variable("COL2")),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty()))
+                        .addAggregation(p.variable("COUNT", BIGINT), p.rowExpression("count(COL2)"))
+                        .singleGroupingSet(p.variable("COL1"))))
+                .matches(project(
+                        ImmutableMap.of(
+                                "COL1", expression("COL1"),
+                                "COUNT", expression("IF(COL2 IS NULL, BIGINT '0', COUNT)")),
+                        join(JoinType.LEFT, ImmutableList.of(equiJoinClause("COL1", "COL2")),
+                                values(ImmutableMap.of("COL1", 0)),
+                                aggregation(
+                                        singleGroupingSet("COL2"),
+                                        ImmutableMap.of(Optional.of("COUNT"), functionCall("count", ImmutableList.of("COL2"))),
+                                        ImmutableMap.of(),
+                                        Optional.empty(),
+                                        SINGLE,
+                                        values(ImmutableMap.of("COL2", 0))))));
+    }
+
+    @Test
+    public void testUsesSyntheticNullAggregationForArrayAgg()
+    {
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(ImmutableList.of(p.variable("COL1")), ImmutableList.of(constantExpressions(BIGINT, 10L))),
+                                p.values(p.variable("COL2"), p.variable("COL3")),
+                                ImmutableList.of(new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))),
+                                ImmutableList.of(p.variable("COL1"), p.variable("COL2"), p.variable("COL3")),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty()))
+                        .addAggregation(p.variable("ARRAY", new ArrayType(BIGINT)), p.rowExpression("array_agg(COL3)"))
+                        .singleGroupingSet(p.variable("COL1"))))
+                .matches(project(
+                        ImmutableMap.of(
+                                "COL1", expression("COL1"),
+                                "ARRAY", expression("IF(COL2 IS NULL, ARRAY_DEFAULT, ARRAY)")),
+                        join(JoinType.INNER, ImmutableList.of(),
+                                join(JoinType.LEFT, ImmutableList.of(equiJoinClause("COL1", "COL2")),
+                                        values(ImmutableMap.of("COL1", 0)),
+                                        aggregation(
+                                                singleGroupingSet("COL2"),
+                                                ImmutableMap.of(Optional.of("ARRAY"), functionCall("array_agg", ImmutableList.of("COL3"))),
+                                                ImmutableMap.of(),
+                                                Optional.empty(),
+                                                SINGLE,
+                                                values("COL2", "COL3"))),
+                                aggregation(
+                                        globalAggregation(),
+                                        ImmutableMap.of(Optional.of("ARRAY_DEFAULT"), functionCall("array_agg", ImmutableList.of("NULL_ARRAY_VALUE"))),
+                                        ImmutableMap.of(),
+                                        Optional.empty(),
+                                        SINGLE,
+                                        values(ImmutableMap.of("NULL_ARRAY_VALUE", 2))))));
     }
 }

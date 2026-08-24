@@ -18,6 +18,7 @@ import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.JoinType;
 import com.facebook.presto.spi.plan.Ordering;
 import com.facebook.presto.spi.plan.OrderingScheme;
+import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.iterative.rule.test.RuleTester;
 import com.google.common.collect.ImmutableList;
@@ -30,7 +31,9 @@ import java.util.Optional;
 import static com.facebook.presto.SystemSessionProperties.USE_DEFAULTS_FOR_CORRELATED_AGGREGATION_PUSHDOWN_THROUGH_OUTER_JOINS;
 import static com.facebook.presto.common.block.SortOrder.ASC_NULLS_LAST;
 import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.spi.plan.AggregationNode.Step.PARTIAL;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.SINGLE;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.aggregation;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.equiJoinClause;
@@ -77,7 +80,7 @@ public class TestPushAggregationThroughOuterJoin
                 .matches(
                         project(ImmutableMap.of(
                                 "COL1", expression("COL1"),
-                                "COALESCE", expression("coalesce(AVG, AVG_NULL)")),
+                                "AVG", expression("IF(COL2 IS NULL, AVG_DEFAULT, AVG)")),
                                 join(JoinType.INNER, ImmutableList.of(),
                                         join(JoinType.LEFT, ImmutableList.of(equiJoinClause("COL1", "COL2")),
                                                 values(ImmutableMap.of("COL1", 0)),
@@ -90,11 +93,11 @@ public class TestPushAggregationThroughOuterJoin
                                                         values(ImmutableMap.of("COL2", 0)))),
                                         aggregation(
                                                 globalAggregation(),
-                                                ImmutableMap.of(Optional.of("AVG_NULL"), functionCall("avg", ImmutableList.of("null_literal"))),
+                                                ImmutableMap.of(Optional.of("AVG_DEFAULT"), functionCall("avg", ImmutableList.of("null_literal"))),
                                                 ImmutableMap.of(),
                                                 Optional.empty(),
                                                 SINGLE,
-                                                values(ImmutableMap.of("null_literal", 0))))));
+                                                values(ImmutableMap.of("null_literal", 1))))));
     }
 
     @Test
@@ -110,7 +113,7 @@ public class TestPushAggregationThroughOuterJoin
                                                 ImmutableList.of(constantExpressions(BIGINT, 10L, 20L))),
                                         p.values(p.variable("COL2"), p.variable("COL4")),
                                         ImmutableList.of(new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))),
-                                        ImmutableList.of(p.variable("COL1"), p.variable("COL2")),
+                                        ImmutableList.of(p.variable("COL1"), p.variable("COL3"), p.variable("COL2"), p.variable("COL4")),
                                         Optional.empty(),
                                         Optional.empty(),
                                         Optional.empty()))
@@ -126,7 +129,7 @@ public class TestPushAggregationThroughOuterJoin
                         project(ImmutableMap.of(
                                 "COL1", expression("COL1"),
                                 "COL3", expression("COL3"),
-                                "COALESCE", expression("coalesce(AVG, AVG_NULL)")),
+                                "AVG", expression("IF(COL2 IS NULL, AVG_DEFAULT, AVG)")),
                                 join(JoinType.INNER, ImmutableList.of(),
                                         join(JoinType.LEFT, ImmutableList.of(equiJoinClause("COL1", "COL2")),
                                                 values(ImmutableMap.of("COL1", 0, "COL3", 0)),
@@ -143,7 +146,7 @@ public class TestPushAggregationThroughOuterJoin
                                                         values(ImmutableList.of("COL2", "COL4")))),
                                         aggregation(
                                                 globalAggregation(),
-                                                ImmutableMap.of(Optional.of("AVG_NULL"),
+                                                ImmutableMap.of(Optional.of("AVG_DEFAULT"),
                                                         functionCall(
                                                                 "avg",
                                                                 ImmutableList.of("null_literal"),
@@ -151,7 +154,7 @@ public class TestPushAggregationThroughOuterJoin
                                                 ImmutableMap.of(),
                                                 Optional.empty(),
                                                 SINGLE,
-                                                values(ImmutableList.of("null_literal", "null_literal2"))))));
+                                                values(ImmutableMap.of("null_literal", 2, "null_literal2", 3))))));
     }
 
     @Test
@@ -172,7 +175,7 @@ public class TestPushAggregationThroughOuterJoin
                         .singleGroupingSet(p.variable("COL1"))))
                 .matches(
                         project(ImmutableMap.of(
-                                "COALESCE", expression("coalesce(AVG, AVG_NULL)"),
+                                "AVG", expression("IF(COL2 IS NULL, AVG_DEFAULT, AVG)"),
                                 "COL1", expression("COL1")),
                                 join(JoinType.INNER, ImmutableList.of(),
                                         join(JoinType.RIGHT, ImmutableList.of(equiJoinClause("COL2", "COL1")),
@@ -187,7 +190,7 @@ public class TestPushAggregationThroughOuterJoin
                                         aggregation(
                                                 globalAggregation(),
                                                 ImmutableMap.of(
-                                                        Optional.of("AVG_NULL"), functionCall("avg", ImmutableList.of("null_literal"))),
+                                                        Optional.of("AVG_DEFAULT"), functionCall("avg", ImmutableList.of("null_literal"))),
                                                 ImmutableMap.of(),
                                                 Optional.empty(),
                                                 SINGLE,
@@ -272,6 +275,269 @@ public class TestPushAggregationThroughOuterJoin
                                 Optional.empty()))
                         .addAggregation(p.variable("SUM", DOUBLE), p.rowExpression("sum(COL1)"))
                         .singleGroupingSet(p.variable("COL1"))))
+                .doesNotFire();
+    }
+
+    @Test
+    public void testDoesNotFireForCrossSideAggregationArguments()
+    {
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(ImmutableList.of(p.variable("OUTER_KEY", DOUBLE)), ImmutableList.of(constantExpressions(DOUBLE, 10.0))),
+                                p.values(p.variable("INNER_KEY", DOUBLE)),
+                                ImmutableList.of(new EquiJoinClause(p.variable("OUTER_KEY", DOUBLE), p.variable("INNER_KEY", DOUBLE))),
+                                ImmutableList.of(p.variable("OUTER_KEY", DOUBLE), p.variable("INNER_KEY", DOUBLE)),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty()))
+                        .addAggregation(p.variable("CORR", DOUBLE), p.rowExpression("corr(OUTER_KEY, INNER_KEY)"))
+                        .singleGroupingSet(p.variable("OUTER_KEY", DOUBLE))))
+                .doesNotFire();
+    }
+
+    @Test
+    public void testDoesNotFireWhenAggregationFilterUsesOuterSymbol()
+    {
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(ImmutableList.of(p.variable("COL1")), ImmutableList.of(constantExpressions(BIGINT, 10L))),
+                                p.values(p.variable("COL2")),
+                                ImmutableList.of(new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))),
+                                ImmutableList.of(p.variable("COL1"), p.variable("COL2")),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty()))
+                        .addAggregation(
+                                p.variable("SUM", BIGINT),
+                                p.rowExpression("sum(COL2)"),
+                                Optional.of(p.rowExpression("COL1 > 0")),
+                                Optional.empty(),
+                                false,
+                                Optional.empty())
+                        .singleGroupingSet(p.variable("COL1"))))
+                .doesNotFire();
+    }
+
+    @Test
+    public void testDoesNotFireForNondeterministicAggregationFilter()
+    {
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(ImmutableList.of(p.variable("COL1")), ImmutableList.of(constantExpressions(BIGINT, 10L))),
+                                p.values(p.variable("COL2")),
+                                ImmutableList.of(new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))),
+                                ImmutableList.of(p.variable("COL1"), p.variable("COL2")),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty()))
+                        .addAggregation(
+                                p.variable("SUM", BIGINT),
+                                p.rowExpression("sum(COL2)"),
+                                Optional.of(p.rowExpression("random() > 0")),
+                                Optional.empty(),
+                                false,
+                                Optional.empty())
+                        .singleGroupingSet(p.variable("COL1"))))
+                .doesNotFire();
+    }
+
+    @Test
+    public void testDoesNotFireWhenAggregationOrderingUsesOuterSymbol()
+    {
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(ImmutableList.of(p.variable("COL1")), ImmutableList.of(constantExpressions(BIGINT, 10L))),
+                                p.values(p.variable("COL2")),
+                                ImmutableList.of(new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))),
+                                ImmutableList.of(p.variable("COL1"), p.variable("COL2")),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty()))
+                        .addAggregation(
+                                p.variable("AVG", DOUBLE),
+                                p.rowExpression("avg(COL2)"),
+                                Optional.empty(),
+                                Optional.of(new OrderingScheme(ImmutableList.of(new Ordering(p.variable("COL1"), ASC_NULLS_LAST)))),
+                                false,
+                                Optional.empty())
+                        .singleGroupingSet(p.variable("COL1"))))
+                .doesNotFire();
+    }
+
+    @Test
+    public void testDoesNotFireWhenAggregationMaskUsesOuterSymbol()
+    {
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(ImmutableList.of(p.variable("OUTER_KEY", BOOLEAN)), ImmutableList.of(constantExpressions(BOOLEAN, true))),
+                                p.values(p.variable("INNER_KEY", BOOLEAN), p.variable("INNER_VALUE", BIGINT)),
+                                ImmutableList.of(new EquiJoinClause(p.variable("OUTER_KEY", BOOLEAN), p.variable("INNER_KEY", BOOLEAN))),
+                                ImmutableList.of(p.variable("OUTER_KEY", BOOLEAN), p.variable("INNER_KEY", BOOLEAN), p.variable("INNER_VALUE", BIGINT)),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty()))
+                        .addAggregation(
+                                p.variable("SUM", BIGINT),
+                                p.rowExpression("sum(INNER_VALUE)"),
+                                Optional.empty(),
+                                Optional.empty(),
+                                false,
+                                Optional.of(p.variable("OUTER_KEY", BOOLEAN)))
+                        .singleGroupingSet(p.variable("OUTER_KEY", BOOLEAN))))
+                .doesNotFire();
+    }
+
+    @Test
+    public void testPushesAggregationWithInnerMask()
+    {
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(ImmutableList.of(p.variable("OUTER_KEY")), ImmutableList.of(constantExpressions(BIGINT, 10L))),
+                                p.values(p.variable("INNER_KEY"), p.variable("INNER_VALUE"), p.variable("INNER_MASK", BOOLEAN)),
+                                ImmutableList.of(new EquiJoinClause(p.variable("OUTER_KEY"), p.variable("INNER_KEY"))),
+                                ImmutableList.of(p.variable("OUTER_KEY"), p.variable("INNER_KEY"), p.variable("INNER_VALUE"), p.variable("INNER_MASK", BOOLEAN)),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty()))
+                        .addAggregation(
+                                p.variable("SUM", BIGINT),
+                                p.rowExpression("sum(INNER_VALUE)"),
+                                Optional.empty(),
+                                Optional.empty(),
+                                false,
+                                Optional.of(p.variable("INNER_MASK", BOOLEAN)))
+                        .singleGroupingSet(p.variable("OUTER_KEY"))))
+                .matches(project(
+                        ImmutableMap.of(
+                                "OUTER_KEY", expression("OUTER_KEY"),
+                                "SUM", expression("IF(INNER_KEY IS NULL, SUM_DEFAULT, SUM)")),
+                        join(JoinType.INNER, ImmutableList.of(),
+                                join(JoinType.LEFT, ImmutableList.of(equiJoinClause("OUTER_KEY", "INNER_KEY")),
+                                        values(ImmutableMap.of("OUTER_KEY", 0)),
+                                        aggregation(
+                                                singleGroupingSet("INNER_KEY"),
+                                                ImmutableMap.of(Optional.of("SUM"), functionCall("sum", ImmutableList.of("INNER_VALUE"))),
+                                                ImmutableMap.of(new Symbol("SUM"), new Symbol("INNER_MASK")),
+                                                Optional.empty(),
+                                                SINGLE,
+                                                values("INNER_KEY", "INNER_VALUE", "INNER_MASK"))),
+                                aggregation(
+                                        globalAggregation(),
+                                        ImmutableMap.of(Optional.of("SUM_DEFAULT"), functionCall("sum", ImmutableList.of("NULL_VALUE"))),
+                                        ImmutableMap.of(new Symbol("SUM_DEFAULT"), new Symbol("NULL_MASK")),
+                                        Optional.empty(),
+                                        SINGLE,
+                                        values(ImmutableMap.of("NULL_VALUE", 2, "NULL_MASK", 3))))));
+    }
+
+    @Test
+    public void testDoesNotFireForUnsupportedAggregationShapes()
+    {
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(JoinType.LEFT, p.values(p.variable("COL1")), p.values(p.variable("COL2")), new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))))
+                        .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("avg(COL2)"))
+                        .singleGroupingSet(p.variable("COL1"))
+                        .step(PARTIAL)))
+                .doesNotFire();
+
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(JoinType.LEFT, p.values(p.variable("COL1")), p.values(p.variable("COL2")), new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))))
+                        .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("avg(COL2)"))
+                        .singleGroupingSet(p.variable("COL1"))
+                        .preGroupedVariables(p.variable("COL1"))))
+                .doesNotFire();
+
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(p.variable("COL1"), p.variable("HASH")),
+                                p.values(p.variable("COL2")),
+                                new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))))
+                        .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("avg(COL2)"))
+                        .singleGroupingSet(p.variable("COL1"), p.variable("HASH"))
+                        .hashVariable(p.variable("HASH"))))
+                .doesNotFire();
+    }
+
+    @Test
+    public void testDoesNotFireForUnsupportedJoinShapes()
+    {
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(p.variable("COL1")),
+                                p.values(p.variable("COL2")),
+                                ImmutableList.of(new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))),
+                                ImmutableList.of(p.variable("COL1"), p.variable("COL2")),
+                                Optional.of(p.rowExpression("COL1 > COL2"))))
+                        .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("avg(COL2)"))
+                        .singleGroupingSet(p.variable("COL1"))))
+                .doesNotFire();
+
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(p.variable("COL1"), p.variable("LEFT_HASH")),
+                                p.values(p.variable("COL2"), p.variable("RIGHT_HASH")),
+                                ImmutableList.of(new EquiJoinClause(p.variable("COL1"), p.variable("COL2"))),
+                                ImmutableList.of(p.variable("COL1"), p.variable("LEFT_HASH"), p.variable("COL2"), p.variable("RIGHT_HASH")),
+                                Optional.empty(),
+                                Optional.of(p.variable("LEFT_HASH")),
+                                Optional.of(p.variable("RIGHT_HASH"))))
+                        .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("avg(COL2)"))
+                        .singleGroupingSet(p.variable("COL1"), p.variable("LEFT_HASH"))))
+                .doesNotFire();
+
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(p.variable("COL1")),
+                                p.values(p.variable("COL2")),
+                                ImmutableList.of(),
+                                ImmutableList.of(p.variable("COL1"), p.variable("COL2")),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty()))
+                        .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("avg(COL2)"))
+                        .singleGroupingSet(p.variable("COL1"))))
+                .doesNotFire();
+    }
+
+    @Test
+    public void testDoesNotFireWhenDynamicFilterBuildVariableWouldBeDropped()
+    {
+        tester().assertThat(new PushAggregationThroughOuterJoin(getFunctionManager()))
+                .on(p -> p.aggregation(ab -> ab
+                        .source(p.join(
+                                JoinType.LEFT,
+                                p.values(ImmutableList.of(p.variable("OUTER_KEY")), ImmutableList.of(constantExpressions(BIGINT, 10L))),
+                                p.values(p.variable("INNER_KEY"), p.variable("INNER_VALUE")),
+                                ImmutableList.of(new EquiJoinClause(p.variable("OUTER_KEY"), p.variable("INNER_KEY"))),
+                                ImmutableList.of(p.variable("OUTER_KEY"), p.variable("INNER_KEY"), p.variable("INNER_VALUE")),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty(),
+                                ImmutableMap.of("df", p.variable("INNER_VALUE"))))
+                        .addAggregation(p.variable("AVG", DOUBLE), p.rowExpression("avg(INNER_VALUE)"))
+                        .singleGroupingSet(p.variable("OUTER_KEY"))))
                 .doesNotFire();
     }
 }
