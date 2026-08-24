@@ -56,6 +56,7 @@ import static com.facebook.presto.SystemSessionProperties.shouldPushAggregationT
 import static com.facebook.presto.SystemSessionProperties.useDefaultsForCorrelatedAggregationPushdownThroughOuterJoins;
 import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.matching.Capture.newCapture;
+import static com.facebook.presto.metadata.BuiltInTypeAndFunctionNamespaceManager.JAVA_BUILTIN_NAMESPACE;
 import static com.facebook.presto.spi.plan.AggregationNode.globalAggregation;
 import static com.facebook.presto.spi.plan.AggregationNode.singleGroupingSet;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IF;
@@ -113,6 +114,12 @@ import static java.util.Objects.requireNonNull;
 public class PushAggregationThroughOuterJoin
         implements Rule<AggregationNode>
 {
+    private static final Set<QualifiedObjectName> NULL_FOR_SINGLE_NULL_ROW = ImmutableSet.of(
+            QualifiedObjectName.valueOf(JAVA_BUILTIN_NAMESPACE, "avg"),
+            QualifiedObjectName.valueOf(JAVA_BUILTIN_NAMESPACE, "max"),
+            QualifiedObjectName.valueOf(JAVA_BUILTIN_NAMESPACE, "min"),
+            QualifiedObjectName.valueOf(JAVA_BUILTIN_NAMESPACE, "sum"));
+
     private static final Capture<JoinNode> JOIN = newCapture();
 
     private static final Pattern<AggregationNode> PATTERN = aggregation()
@@ -322,6 +329,7 @@ public class PushAggregationThroughOuterJoin
         Map<VariableReferenceExpression, VariableReferenceExpression> sourceAggregationToOverNullMapping = aggregationOverNullInfo.getVariableMapping();
 
         Map<VariableReferenceExpression, RowExpression> literalMap = new HashMap<>();
+        Set<VariableReferenceExpression> nullResultAggregations = new HashSet<>();
 
         if (useDefaultsForCorrelatedAggregations) {
             for (Map.Entry<VariableReferenceExpression, AggregationNode.Aggregation> aggregation : aggregationNode.getAggregations().entrySet()) {
@@ -333,6 +341,9 @@ public class PushAggregationThroughOuterJoin
                         && aggregation.getValue().getArguments().get(0) instanceof VariableReferenceExpression) {
                     defaultLiteral = Optional.of(constant(Long.valueOf(0), aggregation.getKey().getType()));
                 }
+                else if (returnsNullForSingleNullRow(aggregation.getValue())) {
+                    nullResultAggregations.add(aggregation.getKey());
+                }
 
                 if (defaultLiteral.isPresent()) {
                     literalMap.put(aggregation.getKey(), defaultLiteral.get());
@@ -341,7 +352,7 @@ public class PushAggregationThroughOuterJoin
         }
 
         PlanNode finalJoinNode = outerJoin;
-        if (literalMap.size() < aggregationNode.getAggregations().size()) {
+        if (literalMap.size() + nullResultAggregations.size() < aggregationNode.getAggregations().size()) {
             // Do a cross join with the aggregation over null
             finalJoinNode = new JoinNode(
                     outerJoin.getSourceLocation(),
@@ -365,6 +376,12 @@ public class PushAggregationThroughOuterJoin
         Assignments.Builder assignmentsBuilder = Assignments.builder();
         for (VariableReferenceExpression variable : aggregationNode.getOutputVariables()) {
             if (aggregationNode.getAggregations().keySet().contains(variable)) {
+                // An unmatched outer row already supplies the correct null result for these aggregates. Keeping
+                // the pushed variable unchanged also lets null-rejecting predicates simplify the outer join.
+                if (nullResultAggregations.contains(variable)) {
+                    assignmentsBuilder.put(variable, variable);
+                    continue;
+                }
                 RowExpression unmatchedValue = literalMap.containsKey(variable) ? literalMap.get(variable) : sourceAggregationToOverNullMapping.get(variable);
                 assignmentsBuilder.put(variable, new SpecialFormExpression(
                         IF,
@@ -379,6 +396,12 @@ public class PushAggregationThroughOuterJoin
             }
         }
         return Optional.of(new ProjectNode(idAllocator.getNextId(), finalJoinNode, assignmentsBuilder.build()));
+    }
+
+    private boolean returnsNullForSingleNullRow(AggregationNode.Aggregation aggregation)
+    {
+        return aggregation.getArguments().size() == 1 &&
+                NULL_FOR_SINGLE_NULL_ROW.contains(functionAndTypeManager.getFunctionMetadata(aggregation.getFunctionHandle()).getName());
     }
 
     private Optional<MappedAggregationInfo> createAggregationOverNull(AggregationNode referenceAggregation, VariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, Lookup lookup)

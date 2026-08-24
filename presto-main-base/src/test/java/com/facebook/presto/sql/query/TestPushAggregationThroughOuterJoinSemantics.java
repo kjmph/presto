@@ -34,6 +34,9 @@ public class TestPushAggregationThroughOuterJoinSemantics
     private static final ImmutableMap<String, String> ENABLED_SESSION_PROPERTIES = ImmutableMap.of(
             PUSH_AGGREGATION_THROUGH_JOIN, "true",
             USE_DEFAULTS_FOR_CORRELATED_AGGREGATION_PUSHDOWN_THROUGH_OUTER_JOINS, "false");
+    private static final ImmutableMap<String, String> DEFAULTS_ENABLED_SESSION_PROPERTIES = ImmutableMap.of(
+            PUSH_AGGREGATION_THROUGH_JOIN, "true",
+            USE_DEFAULTS_FOR_CORRELATED_AGGREGATION_PUSHDOWN_THROUGH_OUTER_JOINS, "true");
 
     @Test
     public void testArrayAggReconstructsUnmatchedRow()
@@ -71,6 +74,26 @@ public class TestPushAggregationThroughOuterJoinSemantics
         }
     }
 
+    @Test
+    public void testBuiltInNullReturningAggregationsPreserveMatchedAndUnmatchedRows()
+    {
+        try (QueryAssertions assertions = new QueryAssertions(DEFAULTS_ENABLED_SESSION_PROPERTIES)) {
+            assertQueryAndPushedOuterJoin(
+                    assertions,
+                    "WITH outer_relation(key) AS (" +
+                            "    SELECT key FROM (VALUES BIGINT '1', BIGINT '2') AS t(key) GROUP BY key) " +
+                            "SELECT outer_relation.key, min(value), max(value), sum(value), avg(value), count(value) " +
+                            "FROM outer_relation " +
+                            "LEFT JOIN (VALUES (BIGINT '1', BIGINT '10'), (BIGINT '1', BIGINT '20')) AS inner_relation(key, value) " +
+                            "    ON outer_relation.key = inner_relation.key " +
+                            "GROUP BY outer_relation.key",
+                    "VALUES " +
+                            "    (BIGINT '1', BIGINT '10', BIGINT '20', BIGINT '30', DOUBLE '15.0', BIGINT '2'), " +
+                            "    (BIGINT '2', CAST(NULL AS BIGINT), CAST(NULL AS BIGINT), CAST(NULL AS BIGINT), CAST(NULL AS DOUBLE), BIGINT '0')",
+                    LEFT);
+        }
+    }
+
     private static void assertQueryAndPushedOuterJoin(QueryAssertions assertions, String actual, String expected, JoinType joinType)
     {
         assertions.assertQuery(actual, expected);
@@ -97,7 +120,7 @@ public class TestPushAggregationThroughOuterJoinSemantics
             JoinNode join = (JoinNode) node;
             if (join.getType() == joinType) {
                 PlanNode nullProducingSide = joinType == LEFT ? join.getRight() : join.getLeft();
-                if (containsNode(nullProducingSide, AggregationNode.class)) {
+                if (containsNonPartialAggregation(nullProducingSide)) {
                     return true;
                 }
             }
@@ -107,13 +130,13 @@ public class TestPushAggregationThroughOuterJoinSemantics
                 .anyMatch(source -> containsPushedAggregationThroughOuterJoin(source, joinType));
     }
 
-    private static boolean containsNode(PlanNode node, Class<? extends PlanNode> nodeClass)
+    private static boolean containsNonPartialAggregation(PlanNode node)
     {
-        if (nodeClass.isInstance(node)) {
+        if (node instanceof AggregationNode && ((AggregationNode) node).getStep() != AggregationNode.Step.PARTIAL) {
             return true;
         }
 
         return node.getSources().stream()
-                .anyMatch(source -> containsNode(source, nodeClass));
+                .anyMatch(TestPushAggregationThroughOuterJoinSemantics::containsNonPartialAggregation);
     }
 }
