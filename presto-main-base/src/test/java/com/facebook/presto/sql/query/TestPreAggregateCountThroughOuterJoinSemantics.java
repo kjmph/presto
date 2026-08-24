@@ -182,7 +182,7 @@ public class TestPreAggregateCountThroughOuterJoinSemantics
             JoinNode join = (JoinNode) node;
             if (join.getType() == joinType) {
                 PlanNode inner = joinType == LEFT ? join.getRight() : join.getLeft();
-                if (containsNode(inner, AggregationNode.class)) {
+                if (containsNonPartialAggregation(inner)) {
                     return true;
                 }
             }
@@ -192,13 +192,13 @@ public class TestPreAggregateCountThroughOuterJoinSemantics
                 .anyMatch(source -> containsPreAggregatedOuterJoin(source, joinType));
     }
 
-    private static boolean containsNode(PlanNode node, Class<? extends PlanNode> nodeClass)
+    private static boolean containsNonPartialAggregation(PlanNode node)
     {
-        if (nodeClass.isInstance(node)) {
+        if (node instanceof AggregationNode && ((AggregationNode) node).getStep() != AggregationNode.Step.PARTIAL) {
             return true;
         }
 
         return node.getSources().stream()
-                .anyMatch(source -> containsNode(source, nodeClass));
+                .anyMatch(TestPreAggregateCountThroughOuterJoinSemantics::containsNonPartialAggregation);
     }
 }
