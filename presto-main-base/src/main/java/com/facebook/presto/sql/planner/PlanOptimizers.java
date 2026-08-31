@@ -126,6 +126,7 @@ import com.facebook.presto.sql.planner.iterative.rule.PushPartialAggregationThro
 import com.facebook.presto.sql.planner.iterative.rule.PushProjectionThroughCrossJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushProjectionThroughExchange;
 import com.facebook.presto.sql.planner.iterative.rule.PushProjectionThroughUnion;
+import com.facebook.presto.sql.planner.iterative.rule.PushSideLocalProjectionThroughJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushRemoteExchangeThroughAssignUniqueId;
 import com.facebook.presto.sql.planner.iterative.rule.PushRemoteExchangeThroughGroupId;
 import com.facebook.presto.sql.planner.iterative.rule.PushSemiJoinThroughUnion;
@@ -1185,6 +1186,15 @@ public class PlanOptimizers
             builder.add(new PhysicalCteOptimizer(metadata)); // Must run before AddExchanges
             builder.add(new StatsRecordingPlanOptimizer(optimizerStats, new AddExchanges(metadata, partitioningProviderManager, featuresConfig.isNativeExecutionEnabled())));
             builder.add(new StatsRecordingPlanOptimizer(optimizerStats, new AddExchangesForSingleNodeExecution(metadata)));
+            // Join distribution and physical exchanges are now fixed. Restrict
+            // the rewrite to sides with a real remote repartition; the final
+            // projection-pushdown pass moves its projects below those exchanges.
+            builder.add(new IterativeOptimizer(
+                    metadata,
+                    ruleStats,
+                    statsCalculator,
+                    costCalculator,
+                    ImmutableSet.of(new PushSideLocalProjectionThroughJoin(metadata.getFunctionAndTypeManager()))));
         }
 
         //noinspection UnusedAssignment

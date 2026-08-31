@@ -194,6 +194,7 @@ public final class SystemSessionProperties
     public static final String PUSH_AGGREGATION_THROUGH_UNIQUE_LOOKUP_JOIN = "push_aggregation_through_unique_lookup_join";
     public static final String PRE_AGGREGATE_BEFORE_GROUPING_SETS = "pre_aggregate_before_grouping_sets";
     public static final String PUSH_PROJECTION_THROUGH_CROSS_JOIN = "push_projection_through_cross_join";
+    public static final String PUSH_SIDE_LOCAL_PROJECTION_THROUGH_JOIN = "push_side_local_projection_through_join";
     public static final String PARSE_DECIMAL_LITERALS_AS_DOUBLE = "parse_decimal_literals_as_double";
     public static final String FORCE_SINGLE_NODE_OUTPUT = "force_single_node_output";
     public static final String FILTER_AND_PROJECT_MIN_OUTPUT_PAGE_SIZE = "filter_and_project_min_output_page_size";
@@ -1057,6 +1058,11 @@ public final class SystemSessionProperties
                         PUSH_PROJECTION_THROUGH_CROSS_JOIN,
                         "Push projections that reference only one side of a cross join below the join to evaluate on fewer rows",
                         featuresConfig.isPushProjectionThroughCrossJoin(),
+                        false),
+                booleanProperty(
+                        PUSH_SIDE_LOCAL_PROJECTION_THROUGH_JOIN,
+                        "Reduce partitioned inner join exchange payload by computing deterministic side-local expressions before the join",
+                        featuresConfig.isPushSideLocalProjectionThroughJoin(),
                         false),
                 booleanProperty(
                         PARSE_DECIMAL_LITERALS_AS_DOUBLE,
@@ -3056,6 +3062,11 @@ public final class SystemSessionProperties
     public static boolean isPushProjectionThroughCrossJoin(Session session)
     {
         return session.getSystemProperty(PUSH_PROJECTION_THROUGH_CROSS_JOIN, Boolean.class);
+    }
+
+    public static boolean isPushSideLocalProjectionThroughJoin(Session session)
+    {
+        return session.getSystemProperty(PUSH_SIDE_LOCAL_PROJECTION_THROUGH_JOIN, Boolean.class);
     }
 
     public static boolean isParseDecimalLiteralsAsDouble(Session session)

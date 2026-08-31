@@ -173,6 +173,7 @@ public class FeaturesConfig
     private boolean simplifyAggregationsOverConstant;
     private boolean preAggregateBeforeGroupingSets;
     private boolean pushProjectionThroughCrossJoin;
+    private boolean pushSideLocalProjectionThroughJoin = true;
     private double memoryRevokingTarget = 0.5;
     private double memoryRevokingThreshold = 0.9;
     private boolean useMarkDistinct = true;
@@ -2008,6 +2009,18 @@ public class FeaturesConfig
     public FeaturesConfig setPushProjectionThroughCrossJoin(boolean pushProjectionThroughCrossJoin)
     {
         this.pushProjectionThroughCrossJoin = pushProjectionThroughCrossJoin;
+        return this;
+    }
+
+    public boolean isPushSideLocalProjectionThroughJoin()
+    {
+        return pushSideLocalProjectionThroughJoin;
+    }
+
+    @Config("optimizer.push-side-local-projection-through-join")
+    public FeaturesConfig setPushSideLocalProjectionThroughJoin(boolean pushSideLocalProjectionThroughJoin)
+    {
+        this.pushSideLocalProjectionThroughJoin = pushSideLocalProjectionThroughJoin;
         return this;
     }
 
