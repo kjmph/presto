@@ -16,9 +16,6 @@ FROM quay.io/centos/centos:stream9
 # from https://github.com/facebookincubator/velox/pull/14366
 ARG ARM_BUILD_TARGET
 ARG CUDA_VERSION
-
-ARG CUDA_VERSION
-
 ARG UCX_VERSION
 
 ENV PROMPT_ALWAYS_RESPOND=y
@@ -51,9 +48,50 @@ RUN bash -c "mkdir build && \
                  source ../velox/scripts/setup-centos-adapters.sh && \
                  install_adapters && \
                  install_clang15 && \
-                 install_cuda ${CUDA_VERSION} && \
+                 install_cuda ${CUDA_VERSION}) && \
+    rm -rf build"
+
+# Build UCX after CUDA so its CUDA transports are compiled against the selected
+# toolkit.  A caller may bind an exact UCX source tree into this layer; the
+# default path deliberately contains no autogen.sh, so ordinary builds continue
+# to use UCX_VERSION through Velox's installer.
+ARG UCX_LOCAL_SOURCE=scripts
+ARG UCX_LOCAL_SOURCE_HASH=none
+RUN --mount=type=bind,source=${UCX_LOCAL_SOURCE},target=/local_ucx_source,ro \
+    bash -c "mkdir build && \
+    echo UCX_LOCAL_SOURCE_HASH=${UCX_LOCAL_SOURCE_HASH} && \
+    (cd build && source ../velox/scripts/setup-centos9.sh && \
+                 export UCX_LOCAL_SOURCE=/local_ucx_source && \
+                 source ../velox/scripts/setup-centos-adapters.sh && \
                  install_ucx) && \
     rm -rf build"
+
+# Record what the build requested as well as what UCX reports.  The latter is
+# authoritative when an exact local source replaces UCX_VERSION.
+RUN mkdir -p /opt/presto-ucx-build && \
+    printf '%s\n' "${UCX_VERSION}" > /opt/presto-ucx-build/requested_version && \
+    printf '%s\n' "${UCX_LOCAL_SOURCE_HASH}" > /opt/presto-ucx-build/local_source_hash && \
+    ldconfig && \
+    ucx_info -v > /opt/presto-ucx-build/ucx_info_v.txt 2>&1 && \
+    ldconfig -p | grep -E 'libuc[pst]|libucs' \
+      > /opt/presto-ucx-build/ldconfig_ucx.txt && \
+    ucx_library="$(ucx_info -v | awk '/Library path:/{print $4; exit}')" && \
+    ucx_lib_dir="$(dirname "${ucx_library}")" && \
+    artifacts='libucm.so libucp.so libucs.so libuct.so' && \
+    if [ "${UCX_LOCAL_SOURCE_HASH}" != none ]; then \
+      artifacts="${artifacts} ucx/libuct_cuda.so ucx/libuct_ib_efa.so"; \
+    fi && \
+    : > /opt/presto-ucx-build/installed_artifacts.sha256 && \
+    for artifact in ${artifacts}; do \
+      resolved="$(readlink -f "${ucx_lib_dir}/${artifact}")" && \
+      test -f "${resolved}" && \
+      digest="$(sha256sum "${resolved}" | awk '{print $1}')" && \
+      printf '%s  %s\n' "${digest}" "${artifact}" \
+        >> /opt/presto-ucx-build/installed_artifacts.sha256; \
+    done && \
+    sha256sum /opt/presto-ucx-build/installed_artifacts.sha256 | \
+      awk '{print $1}' \
+      > /opt/presto-ucx-build/installed_artifacts_manifest_sha256
 
 # Install sccache for optional S3-backed compile caching.
 # Use NVIDIA's RAPIDS fork, not upstream mozilla/sccache: upstream has no nvcc device
