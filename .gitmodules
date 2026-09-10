@@ -1,4 +1,4 @@
 [submodule "presto-native-execution/velox"]
 	path = presto-native-execution/velox
-	url = git@github.ibm.com:perfleap/velox.git
-	branch = dnb-tpcds-zoltans-ucx-2026-08-19
+	url = https://github.com/rapidsai/velox.git
+	branch = WXD-launch
