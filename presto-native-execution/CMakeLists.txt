@@ -137,7 +137,14 @@ if(PRESTO_ENABLE_REMOTE_FUNCTIONS)
 endif()
 
 set(VELOX_ENABLE_CUDF ${PRESTO_ENABLE_CUDF} CACHE BOOL "Enable cuDF support")
+# WXD/IBM ONLY — DO NOT UPSTREAM. A direct Presto GPU+S3 build must select the
+# tested curl/AWS SDK/KvikIO dependency path without a velox-testing wrapper.
+# An explicit cache setting remains authoritative, including OFF.
+if(PRESTO_ENABLE_CUDF AND PRESTO_ENABLE_S3)
+  option(VELOX_ENABLE_S3_DIRECT_RECEIVE "WXD/IBM GPU S3 direct receive" ON)
+endif()
 if(PRESTO_ENABLE_CUDF)
+  option(VELOX_ENABLE_UCX_EXCHANGE "WXD/IBM GPU UCX exchange" ON)
   add_compile_definitions(PRESTO_ENABLE_CUDF)
   enable_language(CUDA)
   # Conda fmt is found by find_package() in a parent scope; rapids-cmake then

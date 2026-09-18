@@ -1,0 +1,9 @@
+[
+  {
+    "overrideSessionProperties": false,
+    "sessionProperties": {
+      "native_cudf_exchange_enabled": "true",
+      "experimental_deterministic_bounded_splits": "true"
+    }
+  }
+]

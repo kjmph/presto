@@ -22,8 +22,10 @@ ENV PROMPT_ALWAYS_RESPOND=y
 ENV CC=/opt/rh/gcc-toolset-12/root/bin/gcc
 ENV CXX=/opt/rh/gcc-toolset-12/root/bin/g++
 ENV ARM_BUILD_TARGET=${ARM_BUILD_TARGET}
-ENV CUDA_VERSION=${CUDA_VERSION:-13.0}
-ENV UCX_VERSION=${UCX_VERSION:-1.20.1}
+# WXD/IBM ONLY — DO NOT UPSTREAM. UCX 1.22 plus the Blackwell RTX IPC
+# bandwidth fix (openucx/ucx#11865), not the parked raw/PULL experiments.
+ENV CUDA_VERSION=${CUDA_VERSION:-13.2}
+ENV UCX_VERSION=${UCX_VERSION:-462c56777aaf268d7daf1b5d43e6f49e69b0207e}
 
 RUN mkdir -p /scripts /velox/scripts
 COPY scripts /scripts
@@ -50,6 +52,17 @@ RUN bash -c "mkdir build && \
                  install_clang15 && \
                  install_cuda ${CUDA_VERSION}) && \
     rm -rf build"
+
+# Keep the direct-receive dependencies in their existing isolated prefix.
+# A direct Presto build must not need velox-testing to supply these libraries.
+RUN bash -c "mkdir build && \
+    (cd build && source ../velox/scripts/setup-centos-adapters.sh && \
+                 install_s3_direct_receive_deps) && \
+    rm -rf build"
+ENV CMAKE_PREFIX_PATH=/usr/local/s3-direct-receive
+ENV AWSSDK_ROOT_DIR=/usr/local/s3-direct-receive
+ENV AWSSDK_DIR=/usr/local/s3-direct-receive/lib/cmake/AWSSDK
+ENV CURL_DIR=/usr/local/s3-direct-receive/lib/cmake/CURL
 
 # Build UCX after CUDA so its CUDA transports are compiled against the selected
 # toolkit.  A caller may bind an exact UCX source tree into this layer; the
@@ -78,7 +91,8 @@ RUN mkdir -p /opt/presto-ucx-build && \
     ucx_library="$(ucx_info -v | awk '/Library path:/{print $4; exit}')" && \
     ucx_lib_dir="$(dirname "${ucx_library}")" && \
     artifacts='libucm.so libucp.so libucs.so libuct.so' && \
-    if [ "${UCX_LOCAL_SOURCE_HASH}" != none ]; then \
+    if [ "${UCX_LOCAL_SOURCE_HASH}" != none ] || \
+       [ "${UCX_VERSION}" = 462c56777aaf268d7daf1b5d43e6f49e69b0207e ]; then \
       artifacts="${artifacts} ucx/libuct_cuda.so ucx/libuct_ib_efa.so"; \
     fi && \
     : > /opt/presto-ucx-build/installed_artifacts.sha256 && \
