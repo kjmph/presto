@@ -39,7 +39,7 @@ function install_presto_deps_from_package_managers {
 }
 
 function install_gperf {
-  wget_and_untar https://mirrors.ocf.berkeley.edu/gnu/gperf/gperf-${GPERF_VERSION}.tar.gz gperf
+  wget_and_untar https://ftp.gnu.org/gnu/gperf/gperf-${GPERF_VERSION}.tar.gz gperf
   (
     cd ${DEPENDENCY_DIR}/gperf || exit &&
       ./configure --prefix=/usr/local/gperf/3_1 &&
