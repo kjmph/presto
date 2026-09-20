@@ -108,9 +108,11 @@ will not appear in a separate `docker exec ... printenv` invocation.
 
 ## Build directly through Presto
 
-The Velox gitlink is `a4770a274975a9a3596307a816ca4bac4b541089`, published on
+The Velox gitlink is `9ddceae076ea3578483581672b45c4832f68413d`, published on
 `rapidsai/velox:WXD-launch`. It includes the cache/ingress improvements, IPC
-compression fix and GPU runtime defaults. Recursive builds must use this pinned
+compression fix, GPU runtime defaults and the matched curl/KvikIO adaptive-MSS
+pins. The WXD direct-S3 profile enables adaptive MSS unless explicitly overridden
+with `KVIKIO_REMOTE_ADAPTIVE_TCP_MSS=OFF`. Recursive builds must use this pinned
 commit; a submodule branch name does not advance the dependency by itself.
 
 From `presto-native-execution` in a recursive checkout, the existing Docker
@@ -145,7 +147,7 @@ budgets for the machine and container layout: eight workers can retain up to
 not a substitute for sizing this deployment. Keep the deployment's memory
 arbitration, query guardrails, logging and security configuration as well.
 
-The build/profile does not install ENA drivers, change `tcp_rmem`, select jumbo
+The build/profile does not install ENA drivers, change `tcp_rmem`, hard-code jumbo
 S3 IPs, tune queues/IRQs, set affinity or create credentials. Strict direct receive
 requires the matching dependencies and a supported kernel/TLS path. UCXX error
 handling is disabled as in the measured baseline; reduced fault tolerance,
