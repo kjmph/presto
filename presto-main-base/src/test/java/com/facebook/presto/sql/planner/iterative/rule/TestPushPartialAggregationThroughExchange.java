@@ -214,7 +214,7 @@ public class TestPushPartialAggregationThroughExchange
     }
 
     @Test
-    public void testNoPartialAggregationWhenGroupedEstimateReductionBelowThreshold()
+    public void testPartialAggregationPushedWhenGroupedEstimateReductionBelowThreshold()
     {
         tester().assertThat(new PushPartialAggregationThroughExchange(getFunctionManager(), false))
                 .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "AUTOMATIC")
@@ -237,11 +237,16 @@ public class TestPushPartialAggregationThroughExchange
                         .addVariableStatistics(variable("b", DOUBLE), new VariableStatsEstimate(0, 800, 0, 8, 800))
                         .setConfidence(FACT)
                         .build())
-                .doesNotFire();
+                .matches(exchange(
+                        project(
+                                aggregation(
+                                        ImmutableMap.of("SUM", functionCall("sum", ImmutableList.of("a"))),
+                                        PARTIAL,
+                                        values("a", "b")))));
     }
 
     @Test
-    public void testNoPartialAggregationWhenGroupedEstimateShowsReductionForSmallInput()
+    public void testPartialAggregationPushedWhenGroupedEstimateShowsReductionForSmallInput()
     {
         tester().assertThat(new PushPartialAggregationThroughExchange(getFunctionManager(), false))
                 .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "AUTOMATIC")
@@ -264,7 +269,12 @@ public class TestPushPartialAggregationThroughExchange
                         .addVariableStatistics(variable("b", DOUBLE), new VariableStatsEstimate(0, 100, 0, 8, 100))
                         .setConfidence(FACT)
                         .build())
-                .doesNotFire();
+                .matches(exchange(
+                        project(
+                                aggregation(
+                                        ImmutableMap.of("SUM", functionCall("sum", ImmutableList.of("a"))),
+                                        PARTIAL,
+                                        values("a", "b")))));
     }
 
     @Test
