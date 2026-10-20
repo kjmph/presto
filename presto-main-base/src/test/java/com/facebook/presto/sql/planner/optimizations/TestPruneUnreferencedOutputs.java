@@ -45,6 +45,7 @@ import java.util.Optional;
 
 import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
 import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.common.type.DoubleType.DOUBLE;
 import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.metadata.MetadataManager.createTestMetadataManager;
@@ -264,7 +265,7 @@ public class TestPruneUnreferencedOutputs
     {
         assertRuleApplication()
                 .on(p -> {
-                    VariableReferenceExpression match = p.variable("match");
+                    VariableReferenceExpression match = p.variable("match", BOOLEAN);
                     VariableReferenceExpression leftKey = p.variable("leftKey", BIGINT);
                     VariableReferenceExpression leftFilterValue = p.variable("leftFilterValue", BIGINT);
                     VariableReferenceExpression leftUnused = p.variable("leftUnused", BIGINT);
@@ -292,7 +293,7 @@ public class TestPruneUnreferencedOutputs
                 .matches(
                         output(
                                 project(
-                                        semiJoin("leftKey", "rightKey", "match",
+                                        semiJoin("leftKey", "rightKey", "match", "leftFilterValue <> rightFilterValue",
                                                 values("leftKey", "leftFilterValue"),
                                                 values("rightKey", "rightFilterValue")))));
     }
