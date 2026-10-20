@@ -3786,8 +3786,8 @@ public class TestSqlParser
         assertStatement("CREATE TABLE foo (a VARCHAR, parent_id BIGINT, CONSTRAINT fk FOREIGN KEY (parent_id) REFERENCES parent (id) DISABLED RELY NOT ENFORCED)",
                 new CreateTable(QualifiedName.of("foo"),
                         ImmutableList.of(
-                                new ColumnDefinition(identifier("a"), "VARCHAR", true, emptyList(), Optional.empty()),
-                                new ColumnDefinition(identifier("parent_id"), "BIGINT", true, emptyList(), Optional.empty()),
+                                new ColumnDefinition(QualifiedName.of("a"), "VARCHAR", true, emptyList(), Optional.empty()),
+                                new ColumnDefinition(QualifiedName.of("parent_id"), "BIGINT", true, emptyList(), Optional.empty()),
                                 new ConstraintSpecification(Optional.of("fk"), ImmutableList.of("parent_id"), QualifiedName.of("parent"), ImmutableList.of("id"), false, true, false)),
                         false,
                         ImmutableList.of(),
