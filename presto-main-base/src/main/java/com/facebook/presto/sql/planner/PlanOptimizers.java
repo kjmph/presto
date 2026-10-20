@@ -126,10 +126,10 @@ import com.facebook.presto.sql.planner.iterative.rule.PushPartialAggregationThro
 import com.facebook.presto.sql.planner.iterative.rule.PushProjectionThroughCrossJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushProjectionThroughExchange;
 import com.facebook.presto.sql.planner.iterative.rule.PushProjectionThroughUnion;
-import com.facebook.presto.sql.planner.iterative.rule.PushSideLocalProjectionThroughJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushRemoteExchangeThroughAssignUniqueId;
 import com.facebook.presto.sql.planner.iterative.rule.PushRemoteExchangeThroughGroupId;
 import com.facebook.presto.sql.planner.iterative.rule.PushSemiJoinThroughUnion;
+import com.facebook.presto.sql.planner.iterative.rule.PushSideLocalProjectionThroughJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushTableWriteThroughUnion;
 import com.facebook.presto.sql.planner.iterative.rule.PushTopNThroughCardinalityPreservingJoin;
 import com.facebook.presto.sql.planner.iterative.rule.PushTopNThroughUnion;
