@@ -27,6 +27,7 @@ import java.util.Optional;
 import java.util.function.Predicate;
 
 import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.expression;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.semiJoin;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strictProject;
@@ -66,7 +67,7 @@ public class TestPruneSemiJoinFilteringSourceColumns
         tester().assertThat(new PruneSemiJoinFilteringSourceColumns())
                 .on(p -> buildFilteredSemiJoin(p, variable -> true))
                 .matches(
-                        semiJoin("leftKey", "rightKey", "match",
+                        semiJoin("leftKey", "rightKey", "match", "leftFilterValue <> rightFilterValue",
                                 values("leftKey", "leftFilterValue"),
                                 strictProject(
                                         ImmutableMap.of(
@@ -78,7 +79,7 @@ public class TestPruneSemiJoinFilteringSourceColumns
 
     private static PlanNode buildSemiJoin(PlanBuilder p, Predicate<VariableReferenceExpression> filteringSourceVariableFilter)
     {
-        VariableReferenceExpression match = p.variable("match");
+        VariableReferenceExpression match = p.variable("match", BOOLEAN);
         VariableReferenceExpression leftKey = p.variable("leftKey");
         VariableReferenceExpression rightKey = p.variable("rightKey");
         VariableReferenceExpression rightKeyHash = p.variable("rightKeyHash");
@@ -100,7 +101,7 @@ public class TestPruneSemiJoinFilteringSourceColumns
 
     private PlanNode buildFilteredSemiJoin(PlanBuilder p, Predicate<VariableReferenceExpression> filteringSourceVariableFilter)
     {
-        VariableReferenceExpression match = p.variable("match");
+        VariableReferenceExpression match = p.variable("match", BOOLEAN);
         VariableReferenceExpression leftKey = p.variable("leftKey");
         VariableReferenceExpression leftFilterValue = p.variable("leftFilterValue");
         VariableReferenceExpression rightKey = p.variable("rightKey");

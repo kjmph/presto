@@ -27,6 +27,7 @@ import java.util.Optional;
 import java.util.function.Predicate;
 
 import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.expression;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.semiJoin;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strictProject;
@@ -90,7 +91,7 @@ public class TestPruneSemiJoinColumns
                 .matches(
                         strictProject(
                                 ImmutableMap.of("match", expression("match")),
-                                semiJoin("leftKey", "rightKey", "match",
+                                semiJoin("leftKey", "rightKey", "match", "leftFilterValue <> rightFilterValue",
                                         strictProject(
                                                 ImmutableMap.of(
                                                         "leftKey", expression("leftKey"),
@@ -102,7 +103,7 @@ public class TestPruneSemiJoinColumns
 
     private static PlanNode buildProjectedSemiJoin(PlanBuilder p, Predicate<VariableReferenceExpression> projectionFilter)
     {
-        VariableReferenceExpression match = p.variable("match");
+        VariableReferenceExpression match = p.variable("match", BOOLEAN);
         VariableReferenceExpression leftKey = p.variable("leftKey");
         VariableReferenceExpression leftKeyHash = p.variable("leftKeyHash");
         VariableReferenceExpression leftValue = p.variable("leftValue");
@@ -125,7 +126,7 @@ public class TestPruneSemiJoinColumns
 
     private PlanNode buildProjectedFilteredSemiJoin(PlanBuilder p, Predicate<VariableReferenceExpression> projectionFilter)
     {
-        VariableReferenceExpression match = p.variable("match");
+        VariableReferenceExpression match = p.variable("match", BOOLEAN);
         VariableReferenceExpression leftKey = p.variable("leftKey");
         VariableReferenceExpression leftKeyHash = p.variable("leftKeyHash");
         VariableReferenceExpression leftValue = p.variable("leftValue");
