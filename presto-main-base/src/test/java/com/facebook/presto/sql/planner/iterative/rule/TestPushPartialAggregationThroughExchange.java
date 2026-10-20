@@ -103,8 +103,8 @@ public class TestPushPartialAggregationThroughExchange
     @Test
     public void testPartialAggregationPushedThroughProjectionAndExchange()
     {
-        PushPartialAggregationThroughExchange rule = new PushPartialAggregationThroughExchange(getFunctionManager(), false);
-        tester().assertThat(rule.pushPartialAggregationThroughExchangeWithProjection())
+        PushPartialAggregationThroughExchange rule = new PushPartialAggregationThroughExchange(tester.getMetadata().getFunctionAndTypeManager(), false);
+        tester.assertThat(rule.pushPartialAggregationThroughExchangeWithProjection())
                 .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "ALWAYS")
                 .on(p -> {
                     VariableReferenceExpression a = p.variable("a", DOUBLE);
@@ -184,8 +184,7 @@ public class TestPushPartialAggregationThroughExchange
     @Test
     public void testPartialAggregationPushedWhenGroupedEstimateShowsReduction()
     {
-        tester().assertThat(new PushPartialAggregationThroughExchange(getFunctionManager(), false))
-                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "AUTOMATIC")
+        assertAutomaticPushPartialAggregationThroughExchange()
                 .on(p -> {
                     VariableReferenceExpression a = p.variable("a", DOUBLE);
                     VariableReferenceExpression b = p.variable("b", DOUBLE);
@@ -216,8 +215,7 @@ public class TestPushPartialAggregationThroughExchange
     @Test
     public void testPartialAggregationPushedWhenGroupedEstimateReductionBelowThreshold()
     {
-        tester().assertThat(new PushPartialAggregationThroughExchange(getFunctionManager(), false))
-                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "AUTOMATIC")
+        assertAutomaticPushPartialAggregationThroughExchange()
                 .on(p -> {
                     VariableReferenceExpression a = p.variable("a", DOUBLE);
                     VariableReferenceExpression b = p.variable("b", DOUBLE);
@@ -248,8 +246,7 @@ public class TestPushPartialAggregationThroughExchange
     @Test
     public void testPartialAggregationPushedWhenGroupedEstimateShowsReductionForSmallInput()
     {
-        tester().assertThat(new PushPartialAggregationThroughExchange(getFunctionManager(), false))
-                .setSystemProperty(PARTIAL_AGGREGATION_STRATEGY, "AUTOMATIC")
+        assertAutomaticPushPartialAggregationThroughExchange()
                 .on(p -> {
                     VariableReferenceExpression a = p.variable("a", DOUBLE);
                     VariableReferenceExpression b = p.variable("b", DOUBLE);
