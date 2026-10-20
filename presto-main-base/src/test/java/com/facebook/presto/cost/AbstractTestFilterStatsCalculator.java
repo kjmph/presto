@@ -29,6 +29,7 @@ import org.testng.annotations.Test;
 
 import java.util.Optional;
 
+import static com.facebook.presto.SystemSessionProperties.NATIVE_EXECUTION_ENABLED;
 import static com.facebook.presto.SystemSessionProperties.OPTIMIZER_USE_HISTOGRAMS;
 import static com.facebook.presto.common.type.DoubleType.DOUBLE;
 import static com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder.expression;
@@ -57,6 +58,7 @@ public abstract class AbstractTestFilterStatsCalculator
     private TypeProvider standardTypes;
     private Session session;
     private TestingRowExpressionTranslator translator;
+    private TestingRowExpressionTranslator nativeTranslator;
 
     public AbstractTestFilterStatsCalculator(boolean withHistograms)
     {
@@ -181,7 +183,10 @@ public abstract class AbstractTestFilterStatsCalculator
 
         MetadataManager metadata = MetadataManager.createTestMetadataManager();
         statsCalculator = new FilterStatsCalculator(metadata, new ScalarStatsCalculator(metadata, new InMemoryExpressionOptimizerProvider(metadata)), new StatsNormalizer());
-        translator = new TestingRowExpressionTranslator(MetadataManager.createTestMetadataManager());
+        translator = new TestingRowExpressionTranslator(metadata);
+        nativeTranslator = new TestingRowExpressionTranslator(metadata, Session.builder(session)
+                .setSystemProperty(NATIVE_EXECUTION_ENABLED, "true")
+                .build());
     }
 
     @Test
@@ -320,31 +325,31 @@ public abstract class AbstractTestFilterStatsCalculator
     {
         VariableReferenceExpression mediumVarchar = new VariableReferenceExpression(Optional.empty(), "mediumVarchar", MEDIUM_VARCHAR_TYPE);
 
-        assertExpression("mediumVarchar LIKE '%abc%'")
+        assertLikeExpression("mediumVarchar LIKE '%abc%'")
                 .outputRowsCount(33.0)
                 .variableStats(mediumVarchar, variableStats ->
                         variableStats.distinctValuesCount(8.25)
                                 .nullsFraction(0.0));
 
-        assertExpression("mediumVarchar LIKE 'abc%'")
+        assertLikeExpression("mediumVarchar LIKE 'abc%'")
                 .outputRowsCount(66.0)
                 .variableStats(mediumVarchar, variableStats ->
                         variableStats.distinctValuesCount(16.5)
                                 .nullsFraction(0.0));
 
-        assertExpression("mediumVarchar LIKE '%ab%'")
+        assertLikeExpression("mediumVarchar LIKE '%ab%'")
                 .outputRowsCount(165.0)
                 .variableStats(mediumVarchar, variableStats ->
                         variableStats.distinctValuesCount(41.25)
                                 .nullsFraction(0.0));
 
-        assertExpression("mediumVarchar LIKE '%'")
+        assertLikeExpression("mediumVarchar LIKE '%'")
                 .outputRowsCount(660.0)
                 .variableStats(mediumVarchar, variableStats ->
                         variableStats.distinctValuesCount(165.0)
                                 .nullsFraction(0.0));
 
-        assertExpression("mediumVarchar LIKE 'abc'")
+        assertLikeExpression("mediumVarchar LIKE 'abc'")
                 .outputRowsCount(4.0)
                 .variableStats(mediumVarchar, variableStats ->
                         variableStats.distinctValuesCount(1.0)
@@ -352,13 +357,13 @@ public abstract class AbstractTestFilterStatsCalculator
 
         VariableReferenceExpression unknownVarchar = new VariableReferenceExpression(Optional.empty(), "unknownVarchar", MEDIUM_VARCHAR_TYPE);
 
-        assertExpression("unknownVarchar LIKE '%abc%'")
+        assertLikeExpression("unknownVarchar LIKE '%abc%'")
                 .outputRowsCount(50.0)
                 .variableStats(unknownVarchar, variableStats ->
                         variableStats.distinctValuesCountUnknown()
                                 .nullsFraction(0.0));
 
-        assertExpression("unknownVarchar LIKE 'abc'")
+        assertLikeExpression("unknownVarchar LIKE 'abc'")
                 .outputRowsCountUnknown();
     }
 
@@ -763,10 +768,22 @@ public abstract class AbstractTestFilterStatsCalculator
         return assertExpression(expression(expression));
     }
 
+    private PlanNodeStatsAssertion assertLikeExpression(String expression)
+    {
+        // Native translation preserves LIKE. Java translation rewrites simple
+        // patterns to STRPOS/SUBSTR, which do not exercise LIKE estimation.
+        return assertExpression(expression(expression), nativeTranslator);
+    }
+
     private PlanNodeStatsAssertion assertExpression(Expression expression)
     {
+        return assertExpression(expression, translator);
+    }
+
+    private PlanNodeStatsAssertion assertExpression(Expression expression, TestingRowExpressionTranslator expressionTranslator)
+    {
         // assert both visitors yield the same result
-        RowExpression rowExpression = translator.translateAndOptimize(expression, standardTypes);
+        RowExpression rowExpression = expressionTranslator.translateAndOptimize(expression, standardTypes);
         PlanNodeStatsEstimate expressionStatsEstimate = statsCalculator.filterStats(standardInputStatistics, expression, session, standardTypes);
         PlanNodeStatsEstimate rowExpressionStatsEstimate = statsCalculator.filterStats(standardInputStatistics, rowExpression, session);
         assertEquals(expressionStatsEstimate, rowExpressionStatsEstimate);
