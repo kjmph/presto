@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.sql.planner;
 
-import com.facebook.presto.cost.CostCalculator;
 import com.facebook.presto.cost.CostCalculator.EstimatedExchanges;
+import com.facebook.presto.cost.CostCalculator;
 import com.facebook.presto.cost.CostComparator;
 import com.facebook.presto.cost.StatsCalculator;
 import com.facebook.presto.cost.TaskCountEstimator;
