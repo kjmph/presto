@@ -39,6 +39,7 @@ void testJsonRoundTripFile(const std::string& filename) {
 }
 
 std::string joinNodeJson() {
+  // Java omits absent Optional fields from the wire representation.
   return R"({
     "@type": ".JoinNode",
     "id": "join",
@@ -69,10 +70,6 @@ std::string joinNodeJson() {
       {"@type": "variable", "name": "l_orderkey", "type": "bigint"},
       {"@type": "variable", "name": "r_orderkey", "type": "bigint"}
     ],
-    "filter": null,
-    "leftHashVariable": null,
-    "rightHashVariable": null,
-    "distributionType": null,
     "dynamicFilters": {},
     "leftKeysUnique": true,
     "rightKeysUnique": true,
@@ -84,6 +81,7 @@ std::string joinNodeJson() {
 }
 
 std::string semiJoinNodeJson() {
+  // Java omits absent Optional fields from the wire representation.
   return R"({
     "@type": ".SemiJoinNode",
     "id": "semi_join",
@@ -106,11 +104,7 @@ std::string semiJoinNodeJson() {
     "sourceJoinVariable": {"@type": "variable", "name": "l_orderkey", "type": "bigint"},
     "filteringSourceJoinVariable": {"@type": "variable", "name": "r_orderkey", "type": "bigint"},
     "semiJoinOutput": {"@type": "variable", "name": "match", "type": "boolean"},
-    "sourceHashVariable": null,
-    "filteringSourceHashVariable": null,
-    "distributionType": null,
     "dynamicFilters": {},
-    "filter": null,
     "sourceKeyUnique": true,
     "filteringSourceKeyUnique": false,
     "sourceKeyNonNull": true,
