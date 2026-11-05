@@ -79,8 +79,7 @@ option(PRESTO_ENABLE_CUDF "Enable cuDF support" OFF)
 # default on the UCX research branch so the standard CPU image build includes
 # the experimental CPU-row exchange path without requiring a workflow-specific
 # CMake override. cuDF builds force the Velox option on below as before.
-option(PRESTO_ENABLE_UCX_EXCHANGE
-  "Build the experimental UCX exchange library." ON)
+option(PRESTO_ENABLE_UCX_EXCHANGE "Build the experimental UCX exchange library." ON)
 
 # Forwards user input to VELOX_ENABLE_REMOTE_FUNCTIONS.
 option(PRESTO_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
@@ -132,9 +131,7 @@ endif()
 if(PRESTO_ENABLE_CUDF)
   set(VELOX_ENABLE_UCX_EXCHANGE ON CACHE BOOL "Build UCX exchange" FORCE)
 else()
-  set(VELOX_ENABLE_UCX_EXCHANGE
-    ${PRESTO_ENABLE_UCX_EXCHANGE}
-    CACHE BOOL "Build UCX exchange" FORCE)
+  set(VELOX_ENABLE_UCX_EXCHANGE ${PRESTO_ENABLE_UCX_EXCHANGE} CACHE BOOL "Build UCX exchange" FORCE)
 endif()
 if(VELOX_ENABLE_UCX_EXCHANGE)
   add_compile_definitions(VELOX_ENABLE_UCX_EXCHANGE)
