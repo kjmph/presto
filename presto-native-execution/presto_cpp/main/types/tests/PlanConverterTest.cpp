@@ -333,7 +333,8 @@ TEST_F(PlanConverterTest, joinUniqueKeys) {
 }
 
 TEST_F(PlanConverterTest, semiJoinUniqueKeys) {
-  auto plan = assertToVeloxFragmentFromJson(semiJoinPlanFragmentJson()).planNode;
+  auto plan =
+      assertToVeloxFragmentFromJson(semiJoinPlanFragmentJson()).planNode;
   auto join = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
   ASSERT_NE(join, nullptr);
   EXPECT_EQ(join->joinType(), core::JoinType::kLeftSemiProject);

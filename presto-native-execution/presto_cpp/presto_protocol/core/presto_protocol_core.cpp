@@ -5906,8 +5906,7 @@ GroupedScalarFilterNode::GroupedScalarFilterNode() noexcept {
 
 void to_json(json& j, const GroupedScalarFilterNode& p) {
   j = json::object();
-  j["@type"] =
-      "com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode";
+  j["@type"] = "com.facebook.presto.sql.planner.plan.GroupedScalarFilterNode";
   to_json_key(j, "id", p.id, "GroupedScalarFilterNode", "PlanNodeId", "id");
   to_json_key(
       j, "source", p.source, "GroupedScalarFilterNode", "PlanNode", "source");
